@@ -1,0 +1,41 @@
+name: Build catalog
+
+# Rebuilds dist/*.zip and apps.json from apps/ and commits the result.
+# Contributors only touch apps/<folder>/ — the catalog is always generated.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "scripts/**"
+  pull_request:
+    paths:
+      - "apps/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build & validate
+        run: python scripts/build.py
+
+      - name: Commit catalog
+        if: github.event_name != 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dist apps.json
+          git diff --cached --quiet || git commit -m "chore: rebuild catalog"
+          git push

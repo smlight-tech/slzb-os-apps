@@ -1,0 +1,9 @@
+{
+    "name": "TCP Tools",
+    "folder": "tcp_tools",
+    "ver": "1.0.0",
+    "desc": "TCP server + interactive TCP client built on the TCP_SERVER / TCP_CLIENT classes",
+    "img": "icon.png",
+    "permissions": [],
+    "minFw": "v3.3.8.dev8"
+}

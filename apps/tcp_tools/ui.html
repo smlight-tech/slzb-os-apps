@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+    TCP Tools — SLZB-OS app page.
+
+    Runs inside a sandboxed iframe; everything goes through the BeApp SDK
+    (postMessage bridge). The page only renders state — all TCP work happens
+    in the Berry backend (app.be), which keeps server running even
+    while this page is closed.
+-->
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TCP Tools</title>
+    <link rel="stylesheet" href="/css/merged.css">
+    <style>
+        .tcp-log { min-height: 8em; max-height: 16em; overflow-y: auto; font-size: .85em; white-space: pre-wrap; word-break: break-all; }
+    </style>
+</head>
+<body class="p-3 bg-light">
+    <div class="row g-3">
+        <!-- ================= server ================= -->
+        <div class="col-12 col-lg-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title d-flex align-items-center gap-2">
+                        Server
+                        <span id="srvBadge" class="badge bg-secondary">stopped</span>
+                    </h5>
+                    <p id="srvInfo" class="text-body-secondary small mb-2">start the server, then <code>nc &lt;device-ip&gt; &lt;port&gt;</code> from any computer</p>
+
+                    <div class="input-group mb-2">
+                        <span class="input-group-text">Port</span>
+                        <input id="srvPort" type="number" class="form-control" value="4000" min="1" max="65535">
+                        <button id="srvStart" class="btn btn-outline-primary">Start</button>
+                        <button id="srvStop" class="btn btn-outline-danger" disabled>Stop</button>
+                    </div>
+
+                    <div class="input-group mb-2">
+                        <input id="srvData" type="text" class="form-control" placeholder="message to all connected clients (\n is appended)">
+                        <button id="srvSend" class="btn btn-success">Send</button>
+                    </div>
+
+                    <pre id="srvLog" class="border rounded p-2 tcp-log mb-0"></pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= client ================= -->
+        <div class="col-12 col-lg-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title d-flex align-items-center gap-2">
+                        Client
+                        <span id="clnBadge" class="badge bg-secondary">disconnected</span>
+                    </h5>
+                    <p class="text-body-secondary small mb-2">raw TCP connection to any host (try the echo server on this device)</p>
+
+                    <div class="input-group mb-2">
+                        <input id="clnHost" type="text" class="form-control" placeholder="host / IP" value="127.0.0.1">
+                        <input id="clnPort" type="number" class="form-control" style="max-width: 7em;" value="4000" min="1" max="65535">
+                        <button id="clnConnect" class="btn btn-outline-primary">Connect</button>
+                        <button id="clnClose" class="btn btn-outline-danger" disabled>Close</button>
+                    </div>
+
+                    <div class="input-group mb-2">
+                        <input id="clnData" type="text" class="form-control" placeholder="text to send (\n is appended)">
+                        <button id="clnSend" class="btn btn-success">Send</button>
+                    </div>
+
+                    <pre id="clnLog" class="border rounded p-2 tcp-log mb-0"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/beAppSdk.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const cmd = (obj) => BeApp.sendMessage(JSON.stringify(obj));
+
+        // appended as text nodes — network data never touches innerHTML
+        function logTo(el, text) {
+            el.appendChild(document.createTextNode(text + "\n"));
+            while (el.childNodes.length > 200) el.removeChild(el.firstChild);
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function setBadge(el, on, onText, offText) {
+            el.className = "badge " + (on ? "bg-success" : "bg-secondary");
+            el.textContent = on ? onText : offText;
+        }
+
+        BeApp.ready().then(() => cmd({ cmd: "status" }));
+
+        BeApp.onMessage((raw) => {
+            const m = JSON.parse(raw);
+            if (m.type === "status") {
+                setBadge($("srvBadge"), m.srv, `listening :${m.srvPort} (${m.srvClients} client${m.srvClients === 1 ? "" : "s"})`, "stopped");
+                setBadge($("clnBadge"), m.cln, `connected ${m.clnPeer}`, "disconnected");
+                $("srvInfo").textContent = m.srv
+                    ? `test it: nc ${m.ip} ${m.srvPort}`
+                    : `start the server, then: nc ${m.ip} <port>`;
+                $("srvStart").disabled = m.srv;
+                $("srvStop").disabled = !m.srv;
+                $("clnConnect").disabled = m.cln;
+                $("clnClose").disabled = !m.cln;
+            } else if (m.type === "log") {
+                logTo($(m.scope === "cln" ? "clnLog" : "srvLog"), `* ${m.text}`);
+            } else if (m.type === "srv_rx") {
+                logTo($("srvLog"), `[${m.from}] ${m.data.trimEnd()}`);
+            } else if (m.type === "cln_rx") {
+                logTo($("clnLog"), `< ${m.data.trimEnd()}`);
+            }
+        });
+
+        $("srvStart").addEventListener("click", () => cmd({ cmd: "srv_start", port: +$("srvPort").value || 4000 }));
+        $("srvStop").addEventListener("click", () => cmd({ cmd: "srv_stop" }));
+
+        const srvSend = () => {
+            const text = $("srvData").value;
+            if (!text) return;
+            cmd({ cmd: "srv_send", data: text + "\n" });
+            logTo($("srvLog"), `> ${text}`);
+            $("srvData").value = "";
+        };
+        $("srvSend").addEventListener("click", srvSend);
+        $("srvData").addEventListener("keydown", (e) => { if (e.key === "Enter") srvSend(); });
+
+        $("clnConnect").addEventListener("click", () => cmd({ cmd: "cln_connect", host: $("clnHost").value.trim(), port: +$("clnPort").value || 4000 }));
+        $("clnClose").addEventListener("click", () => cmd({ cmd: "cln_close" }));
+
+        const send = () => {
+            const text = $("clnData").value;
+            if (!text) return;
+            cmd({ cmd: "cln_send", data: text + "\n" });
+            logTo($("clnLog"), `> ${text}`);
+            $("clnData").value = "";
+        };
+        $("clnSend").addEventListener("click", send);
+        $("clnData").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+    </script>
+</body>
+</html>
