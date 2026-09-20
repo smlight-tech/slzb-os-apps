@@ -1,6 +1,6 @@
 {
   "ver": 1,
-  "updated": "2026-09-20T12:15:39Z",
+  "updated": "2026-09-20T12:27:36Z",
   "apps": [
     {
       "name": "TCP Tools",
@@ -8,7 +8,7 @@
       "appVer": "1.0.0",
       "desc": "TCP server + interactive TCP client built on the TCP_SERVER / TCP_CLIENT classes",
       "zip": "dist/tcp_tools.zip",
-      "size": 21331,
+      "size": 21036,
       "permissions": [],
       "icon": "apps/tcp_tools/icon.png",
       "minFw": "v3.3.8.dev8"
