@@ -1,0 +1,9 @@
+{
+    "name": "ZHB Timers",
+    "folder": "zhb_timers",
+    "ver": "1.0.0",
+    "desc": "Interval / timeout / schedule timers that send commands to Zigbee Hub devices",
+    "img": "icon.png",
+    "permissions": [],
+    "minFw": "v3.3.8.dev8"
+}

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+    ZHB Timers — SLZB-OS app page.
+
+    Runs inside a sandboxed iframe; talks to the Berry backend (app.be) over
+    the BeApp message channel. The page only renders state — the timers
+    themselves run in the backend and keep working while this page is closed.
+-->
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ZHB Timers</title>
+    <link rel="stylesheet" href="/css/merged.css">
+</head>
+<style>
+    input.picker[type="time"] {
+        position: relative;
+    }
+
+    input.picker[type="time"]::-webkit-calendar-picker-indicator {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 100%;
+        height: 100%;
+        padding: 0;
+        color: transparent;
+        background: transparent;
+    }
+</style>
+<body class="p-3 bg-light">
+    <div id="zhbWarn" class="alert alert-warning d-none">
+        Zigbee Hub mode is not active on this coordinator — timers will not fire.
+        Enable the Zigbee Hub radio mode and restart the app.
+    </div>
+
+    <div class="row g-3">
+        <!-- ================= new timer ================= -->
+        <div class="col-12 col-lg-5">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title" id="formTitle">New timer</h5>
+
+                    <div class="mb-2">
+                        <label class="form-label mb-1">Name</label>
+                        <input id="fName" type="text" class="form-control" placeholder="e.g. Lamp off at night">
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label mb-1">Type</label>
+                        <select id="fType" class="form-select">
+                            <option value="interval">Interval — every N seconds</option>
+                            <option value="timeout">Timeout — once, after N seconds</option>
+                            <option value="schedule">Schedule — daily at HH:MM</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-2" id="rowSeconds">
+                        <label class="form-label mb-1">Seconds</label>
+                        <input id="fSeconds" type="number" class="form-control" value="60" min="1">
+                    </div>
+
+                    <div class="mb-2 d-none" id="rowTime">
+                        <label class="form-label mb-1">Time</label>
+                        <input id="fTime" type="time" class="form-control" value="08:00">
+                        <label class="form-label mb-1 mt-2">Days <span class="text-body-secondary">(none = every day)</span></label>
+                        <div id="fDays" class="btn-group w-100" role="group"></div>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label mb-1">Device</label>
+                        <select id="fDevice" class="form-select"></select>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label mb-1">Action</label>
+                        <select id="fAction" class="form-select">
+                            <option value="on">Turn on</option>
+                            <option value="off">Turn off</option>
+                            <option value="toggle" selected>Toggle</option>
+                            <option value="bri">Set brightness</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-2 d-none" id="rowBri">
+                        <label class="form-label mb-1">Brightness: <span id="briVal">128</span></label>
+                        <input id="fBri" type="range" class="form-range" min="1" max="254" value="128">
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label mb-1">Endpoint</label>
+                        <input id="fEp" type="number" class="form-control" value="1" min="1" max="240">
+                    </div>
+
+                    <button id="btnAdd" class="btn btn-primary w-100">Add timer</button>
+                    <button id="btnCancel" class="btn btn-outline-secondary w-100 mt-2 d-none">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= timers list ================= -->
+        <div class="col-12 col-lg-7">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Timers</h5>
+                    <div id="timerList"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/beAppSdk.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const cmd = (obj) => BeApp.sendMessage(JSON.stringify(obj));
+        const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+        let devices = [];
+        const fired = {}; // timer id -> "HH:MM:SS" of the last fire seen by this page
+
+        const devLabel = (d) => d.name ? `${d.name} (${d.model})` : `${d.model} [${d.ieee.slice(-4)}]`;
+        const findDev = (ieee) => devices.find((d) => d.ieee === ieee);
+
+        const ACTION_TEXT = { on: "turn on", off: "turn off", toggle: "toggle", bri: "brightness" };
+
+        // TIME.getAll() weekday convention: Sunday = 0; shown Mon..Sun
+        const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+        // weekday toggle buttons for the schedule type
+        for (const d of DAY_ORDER) {
+            const btn = document.createElement("input");
+            btn.type = "checkbox";
+            btn.className = "btn-check";
+            btn.id = `fDay${d}`;
+            const lbl = document.createElement("label");
+            lbl.className = "btn btn-outline-secondary btn-sm px-1";
+            lbl.htmlFor = btn.id;
+            lbl.textContent = DAY_NAMES[d];
+            $("fDays").append(btn, lbl);
+        }
+        const pickedDays = () => DAY_ORDER.filter((d) => $(`fDay${d}`).checked);
+
+        function timerDesc(t) {
+            const days = Array.isArray(t.days) && t.days.length
+                ? DAY_ORDER.filter((d) => t.days.includes(d)).map((d) => DAY_NAMES[d]).join(",")
+                : "daily";
+            const when = t.type === "interval" ? `every ${t.value}s`
+                : t.type === "timeout" ? `once after ${t.value}s`
+                : `${days} at ${t.value}`;
+            const dev = findDev(t.ieee);
+            const act = t.action === "bri" ? `brightness ${t.bri}` : ACTION_TEXT[t.action] || t.action;
+            return `${when} → ${act} → ${dev ? devLabel(dev) : "0x" + t.ieee}${t.ep !== 1 ? ` (ep ${t.ep})` : ""}`;
+        }
+
+        function renderTimers(timers) {
+            const list = $("timerList");
+            list.textContent = "";
+
+            if (!timers.length) {
+                list.innerHTML = `<p class="text-body-secondary mb-0">No timers yet — create one on the left.</p>`;
+                return;
+            }
+
+            for (const t of timers) {
+                const card = document.createElement("div");
+                card.className = "border rounded p-2 mb-2";
+                card.innerHTML = `
+                    <div class="d-flex flex-wrap align-items-center column-gap-2 row-gap-1">
+                        <b class="me-auto">${esc(t.name)}</b>
+                        <span class="badge ${t.enabled ? "bg-success" : "bg-secondary"}">${t.enabled ? "Running" : "Stopped"}</span>
+                    </div>
+                    <div class="small text-body-secondary mt-1">${esc(timerDesc(t))}</div>
+                    <div class="small text-body-secondary tmr-fired">${fired[t.id] ? "last fired: " + fired[t.id] : ""}</div>
+                    <div class="d-flex gap-2 mt-2">
+                        <button class="btn btn-sm ${t.enabled ? "btn-outline-warning" : "btn-outline-success"} tmr-run">${t.enabled ? "Stop" : "Start"}</button>
+                        <button class="btn btn-sm btn-outline-primary tmr-edit">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger ms-auto tmr-del">Delete</button>
+                    </div>`;
+
+                card.querySelector(".tmr-run").addEventListener("click", () => cmd({ cmd: "run", id: t.id, on: !t.enabled }));
+                card.querySelector(".tmr-edit").addEventListener("click", () => setEditMode(t));
+                card.querySelector(".tmr-del").addEventListener("click", () => {
+                    if (confirm(`Delete timer "${t.name}"?`)) cmd({ cmd: "del", id: t.id });
+                });
+                list.appendChild(card);
+            }
+        }
+
+        function renderDevices() {
+            const sel = $("fDevice");
+            const prev = sel.value;
+            sel.textContent = "";
+
+            if (!devices.length) {
+                sel.appendChild(new Option("-- no paired devices --", ""));
+                return;
+            }
+            for (const d of devices) sel.appendChild(new Option(devLabel(d), d.ieee));
+            if (prev && devices.some((d) => d.ieee === prev)) sel.value = prev;
+        }
+
+        // form field visibility follows the selects
+        const syncForm = () => {
+            const schedule = $("fType").value === "schedule";
+            $("rowSeconds").classList.toggle("d-none", schedule);
+            $("rowTime").classList.toggle("d-none", !schedule);
+            $("rowBri").classList.toggle("d-none", $("fAction").value !== "bri");
+        };
+        $("fType").addEventListener("change", syncForm);
+        $("fAction").addEventListener("change", syncForm);
+        $("fBri").addEventListener("input", () => $("briVal").textContent = $("fBri").value);
+
+        // edit mode: the same form saves changes into an existing timer
+        let editId = null;
+
+        function fillForm(t) {
+            $("fName").value = t.name || "";
+            $("fType").value = t.type;
+            if (t.type === "schedule") $("fTime").value = t.value;
+            else $("fSeconds").value = t.value;
+            for (const d of DAY_ORDER) $(`fDay${d}`).checked = Array.isArray(t.days) && t.days.includes(d);
+            $("fDevice").value = t.ieee;
+            $("fAction").value = t.action;
+            $("fBri").value = t.bri;
+            $("briVal").textContent = t.bri;
+            $("fEp").value = t.ep;
+            syncForm();
+        }
+
+        function setEditMode(t) {
+            editId = t ? t.id : null;
+            $("formTitle").textContent = t ? `Edit "${t.name}"` : "New timer";
+            $("btnAdd").textContent = t ? "Save changes" : "Add timer";
+            $("btnCancel").classList.toggle("d-none", !t);
+            if (t) fillForm(t);
+        }
+
+        $("btnCancel").addEventListener("click", () => setEditMode(null));
+
+        $("btnAdd").addEventListener("click", () => {
+            const type = $("fType").value;
+            const timer = {
+                name: $("fName").value.trim() || undefined,
+                type: type,
+                value: type === "schedule" ? ($("fTime").value || "08:00") : Math.max(1, +$("fSeconds").value || 60),
+                days: type === "schedule" ? pickedDays() : [],
+                ieee: $("fDevice").value,
+                ep: Math.max(1, +$("fEp").value || 1),
+                action: $("fAction").value,
+                bri: +$("fBri").value,
+            };
+
+            if (editId !== null) {
+                cmd({ cmd: "edit", id: editId, timer });
+                setEditMode(null);
+            } else {
+                cmd({ cmd: "add", timer });
+            }
+            $("fName").value = "";
+        });
+
+        BeApp.onMessage((raw) => {
+            const m = JSON.parse(raw);
+
+            if (m.type === "state") {
+                $("zhbWarn").classList.toggle("d-none", !!m.zhb);
+                $("btnAdd").disabled = !m.zhb;
+                devices = Array.isArray(m.devices) ? m.devices : [];
+                const timers = Array.isArray(m.timers) ? m.timers : [];
+                if (editId !== null && !timers.some((t) => t.id === editId)) setEditMode(null); // edited timer is gone
+                renderDevices();
+                renderTimers(timers);
+            } else if (m.type === "fired") {
+                fired[m.id] = new Date().toLocaleTimeString();
+                cmd({ cmd: "list" }); // re-render (a timeout also stops itself)
+            } else if (m.type === "error") {
+                alert(m.text);
+            }
+        });
+
+        BeApp.ready().then(() => cmd({ cmd: "list" }));
+    </script>
+</body>
+</html>
