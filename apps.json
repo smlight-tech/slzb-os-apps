@@ -1,6 +1,6 @@
 {
   "ver": 1,
-  "updated": "2026-09-20T12:27:36Z",
+  "updated": "2026-09-21T06:15:12Z",
   "apps": [
     {
       "name": "TCP Tools",
@@ -11,6 +11,17 @@
       "size": 21036,
       "permissions": [],
       "icon": "apps/tcp_tools/icon.png",
+      "minFw": "v3.3.8.dev8"
+    },
+    {
+      "name": "ZHB Timers",
+      "folder": "zhb_timers",
+      "appVer": "1.0.0",
+      "desc": "Interval / timeout / schedule timers that send commands to Zigbee Hub devices",
+      "zip": "dist/zhb_timers.zip",
+      "size": 31312,
+      "permissions": [],
+      "icon": "apps/zhb_timers/icon.png",
       "minFw": "v3.3.8.dev8"
     }
   ]
