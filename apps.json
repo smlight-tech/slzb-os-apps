@@ -1,6 +1,6 @@
 {
   "ver": 1,
-  "updated": "2026-09-21T16:53:47Z",
+  "updated": "2026-09-30T12:05:15Z",
   "apps": [
     {
       "name": "TCP Tools",
@@ -12,6 +12,17 @@
       "permissions": [],
       "icon": "apps/tcp_tools/icon.png",
       "minFw": "v3.3.8.dev8"
+    },
+    {
+      "name": "USB Serial Terminal",
+      "folder": "usb_terminal",
+      "appVer": "1.0.0",
+      "desc": "Serial terminal for USB devices on the USB host port: Text / HEX, baud rate, DTR / RTS",
+      "zip": "dist/usb_terminal.zip",
+      "size": 39273,
+      "permissions": [],
+      "icon": "apps/usb_terminal/icon.png",
+      "minFw": "v3.4.2.dev1"
     },
     {
       "name": "ZHB Timers",
