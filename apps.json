@@ -1,6 +1,6 @@
 {
   "ver": 1,
-  "updated": "2026-09-30T12:05:15Z",
+  "updated": "2026-09-30T17:53:17Z",
   "apps": [
     {
       "name": "TCP Tools",
@@ -22,6 +22,17 @@
       "size": 39273,
       "permissions": [],
       "icon": "apps/usb_terminal/icon.png",
+      "minFw": "v3.4.2.dev1"
+    },
+    {
+      "name": "Zigbee Sniffer",
+      "folder": "zb_sniffer",
+      "appVer": "1.0.0",
+      "desc": "802.15.4 / Zigbee sniffer on an EFR32 radio: packet log in the app and live stream to Wireshark (ZEP)",
+      "zip": "dist/zb_sniffer.zip",
+      "size": 66835,
+      "permissions": [],
+      "icon": "apps/zb_sniffer/icon.png",
       "minFw": "v3.4.2.dev1"
     },
     {
