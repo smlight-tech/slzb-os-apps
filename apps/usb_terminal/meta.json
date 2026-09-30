@@ -1,0 +1,9 @@
+{
+    "name": "USB Serial Terminal",
+    "folder": "usb_terminal",
+    "ver": "1.0.0",
+    "desc": "Serial terminal for USB devices on the USB host port: Text / HEX, baud rate, DTR / RTS",
+    "img": "icon.png",
+    "permissions": [],
+    "minFw": "v3.4.2.dev1"
+}

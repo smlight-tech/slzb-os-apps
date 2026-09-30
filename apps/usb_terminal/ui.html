@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+    USB Serial Terminal — SLZB-OS app page.
+
+    Runs inside a sandboxed iframe; everything goes through the BeApp SDK (postMessage bridge).
+    The Berry backend (app.be) owns the USB port; this page only renders. Data travels as HEX
+    in both directions, the Text / HEX presentation is done here, so switching the view mode
+    re-renders everything received so far.
+-->
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>USB Serial Terminal</title>
+    <link rel="stylesheet" href="/css/merged.css">
+    <style>
+        .term {
+            height: 22em; overflow-y: auto; margin: 0;
+            background: #111; color: #d8d8d8; font-size: .85em;
+            white-space: pre-wrap; word-break: break-all;
+        }
+        .term .tx { color: #6cc4ff; }
+        .term .sys { color: #9a9a9a; font-style: italic; }
+        .term .err { color: #ff7b7b; }
+        .term .ts { color: #7a7a7a; }
+        .term .ctl { color: #c9a33f; }
+        .dev-row { cursor: pointer; }
+        .dev-row.table-active td { font-weight: 600; }
+        .mono { font-family: var(--bs-font-monospace); }
+    </style>
+</head>
+<body class="p-3 bg-body">
+    <div class="row g-3">
+        <!-- ================= devices ================= -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title d-flex align-items-center gap-2 flex-wrap">
+                        USB devices
+                        <span id="hostBadge" class="badge bg-secondary">…</span>
+                        <span id="hostInfo" class="text-body-secondary small fw-normal"></span>
+                        <button id="refresh" class="btn btn-sm btn-outline-secondary ms-auto">Refresh</button>
+                    </h5>
+                    <div id="hostHint" class="alert alert-warning small py-2 d-none">
+                        The USB host is not running. Enable <b>USB to Ethernet passthrough mode</b> on the
+                        <b>USB Passthrough</b> page and reboot the device. It cannot be used together with an active 4G/LTE add-on.
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover align-middle mb-0">
+                            <thead>
+                                <tr><th>ID</th><th>Device</th><th>VID:PID</th><th>Driver</th><th>Serial</th><th>Interfaces</th><th>State</th></tr>
+                            </thead>
+                            <tbody id="devBody"></tbody>
+                        </table>
+                    </div>
+                    <p id="devEmpty" class="text-body-secondary small mt-2 mb-0 d-none">No USB serial devices connected.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= terminal ================= -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title d-flex align-items-center gap-2 flex-wrap">
+                        Terminal
+                        <span id="portBadge" class="badge bg-secondary">closed</span>
+                        <span class="text-body-secondary small fw-normal ms-auto">
+                            RX <span id="rxCount">0</span> B · TX <span id="txCount">0</span> B
+                        </span>
+                    </h5>
+
+                    <!-- connection -->
+                    <div class="row g-2 mb-2">
+                        <div class="col-12 col-md-5">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Device</span>
+                                <select id="devSel" class="form-select"></select>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Itf</span>
+                                <select id="itfSel" class="form-select"></select>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Baud</span>
+                                <input id="baud" class="form-control" list="baudList" inputmode="numeric" value="115200">
+                                <datalist id="baudList">
+                                    <option value="1200"></option><option value="2400"></option><option value="4800"></option>
+                                    <option value="9600"></option><option value="19200"></option><option value="38400"></option>
+                                    <option value="57600"></option><option value="115200"></option><option value="230400"></option>
+                                    <option value="460800"></option><option value="921600"></option><option value="1000000"></option>
+                                    <option value="2000000"></option>
+                                </datalist>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-2 d-flex gap-2">
+                            <button id="openBtn" class="btn btn-sm btn-primary flex-fill">Open</button>
+                            <button id="closeBtn" class="btn btn-sm btn-outline-danger flex-fill" disabled>Close</button>
+                        </div>
+                    </div>
+
+                    <!-- lines + view -->
+                    <div class="d-flex flex-wrap align-items-center gap-3 mb-2 small">
+                        <div class="form-check form-switch mb-0">
+                            <input id="dtr" class="form-check-input" type="checkbox" disabled>
+                            <label class="form-check-label" for="dtr">DTR</label>
+                        </div>
+                        <div class="form-check form-switch mb-0">
+                            <input id="rts" class="form-check-input" type="checkbox" disabled>
+                            <label class="form-check-label" for="rts">RTS</label>
+                        </div>
+
+                        <div class="btn-group btn-group-sm" role="group" aria-label="View mode">
+                            <input type="radio" class="btn-check" name="view" id="viewText" value="text" checked>
+                            <label class="btn btn-outline-secondary" for="viewText">Text</label>
+                            <input type="radio" class="btn-check" name="view" id="viewHex" value="hex">
+                            <label class="btn btn-outline-secondary" for="viewHex">HEX</label>
+                        </div>
+
+                        <div class="form-check mb-0">
+                            <input id="showTs" class="form-check-input" type="checkbox">
+                            <label class="form-check-label" for="showTs">Timestamps</label>
+                        </div>
+                        <div class="form-check mb-0">
+                            <input id="showTx" class="form-check-input" type="checkbox" checked>
+                            <label class="form-check-label" for="showTx">Show sent</label>
+                        </div>
+                        <div class="form-check mb-0">
+                            <input id="autoScroll" class="form-check-input" type="checkbox" checked>
+                            <label class="form-check-label" for="autoScroll">Autoscroll</label>
+                        </div>
+                        <button id="clearBtn" class="btn btn-sm btn-outline-secondary ms-auto">Clear</button>
+                    </div>
+
+                    <pre id="term" class="term border rounded p-2 mono"></pre>
+
+                    <!-- send -->
+                    <div class="input-group input-group-sm mt-2">
+                        <select id="txMode" class="form-select flex-grow-0" style="width: 6.5em;" title="Input format">
+                            <option value="text">Text</option>
+                            <option value="hex">HEX</option>
+                        </select>
+                        <input id="txData" type="text" class="form-control mono" placeholder="text to send" autocomplete="off" disabled>
+                        <select id="txEol" class="form-select flex-grow-0" style="width: 7.5em;" title="Line ending (text mode)">
+                            <option value="">No ending</option>
+                            <option value="0A">LF \n</option>
+                            <option value="0D">CR \r</option>
+                            <option value="0D0A" selected>CR+LF</option>
+                        </select>
+                        <button id="txBtn" class="btn btn-success" disabled>Send</button>
+                    </div>
+                    <div id="txErr" class="form-text text-danger d-none"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/beAppSdk.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const cmd = (obj) => BeApp.sendMessage(JSON.stringify(obj));
+
+        const LOG_MAX_BYTES = 256 * 1024;   // kept for re-rendering; older entries are dropped
+        const TERM_MAX_NODES = 6000;        // DOM nodes in the terminal before trimming
+
+        const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+        const hex2 = (b) => b.toString(16).toUpperCase().padStart(2, "0");
+        const toHex = (bytes) => Array.from(bytes, hex2).join("");
+
+        function fromHex(str) {
+            const out = new Uint8Array(str.length >> 1);
+            for (let i = 0; i < out.length; i++) out[i] = parseInt(str.substr(i * 2, 2), 16);
+            return out;
+        }
+
+        // ---------- persisted settings (storage may be blocked in the sandbox) ----------
+        const store = {
+            get(k, d) { try { const v = localStorage.getItem("usbterm." + k); return v === null ? d : v; } catch (e) { return d; } },
+            set(k, v) { try { localStorage.setItem("usbterm." + k, v); } catch (e) { /* ignore */ } },
+        };
+
+        // ---------- state ----------
+        let status = { running: false, open: false };
+        let devices = [];
+        let entries = [];   // { dir: "rx"|"tx"|"sys"|"err", t: Date, data: Uint8Array|string }
+        let entryBytes = 0;
+        let rxCount = 0, txCount = 0;
+
+        // renderer state (text view)
+        let decoder = new TextDecoder("utf-8");
+        let atLineStart = true;
+        let lastDir = "";
+        let lastWasCR = false;
+
+        const term = $("term");
+        const viewMode = () => document.querySelector("input[name=view]:checked").value;
+
+        function tsText(t) {
+            return `[${t.toTimeString().slice(0, 8)}.${String(t.getMilliseconds()).padStart(3, "0")}] `;
+        }
+
+        function append(cls, text) {
+            if (!text) return;
+            const span = document.createElement("span");
+            if (cls) span.className = cls;
+            span.textContent = text;
+            term.appendChild(span);
+        }
+
+        function newLine() {
+            if (!atLineStart) { append("", "\n"); atLineStart = true; }
+        }
+
+        function lineStart(t, dir) {
+            if (atLineStart && $("showTs").checked) append("ts", tsText(t));
+            atLineStart = false;
+        }
+
+        // text view of received bytes: CR, LF and CR+LF end a line; other control characters are
+        // shown as Unicode control pictures so they never break the layout
+        function renderRxText(e) {
+            if (lastDir !== "rx") { newLine(); decoder = new TextDecoder("utf-8"); lastWasCR = false; }
+            lastDir = "rx";
+
+            const text = decoder.decode(e.data, { stream: true });
+            let run = "";
+            const flush = (cls) => { if (run) { lineStart(e.t); append(cls, run); run = ""; } };
+
+            for (const chr of text) {
+                const code = chr.codePointAt(0);
+                if (chr === "\n") {
+                    if (lastWasCR) { lastWasCR = false; continue; }
+                    flush(""); lineStart(e.t); append("", "\n"); atLineStart = true;
+                } else if (chr === "\r") {
+                    flush(""); lineStart(e.t); append("", "\n"); atLineStart = true; lastWasCR = true;
+                    continue;
+                } else if (code < 0x20 && chr !== "\t" || code === 0x7f) {
+                    flush("");
+                    lineStart(e.t);
+                    append("ctl", code === 0x7f ? "␡" : String.fromCharCode(0x2400 + code));
+                } else {
+                    run += chr;
+                }
+                lastWasCR = false;
+            }
+            flush("");
+        }
+
+        // HEX view: one block per received chunk / sent message, 16 bytes per row + printable ASCII
+        function renderHex(e, cls, label) {
+            newLine();
+            lastDir = e.dir;
+            const b = e.data;
+            for (let off = 0; off < b.length; off += 16) {
+                const row = b.subarray(off, off + 16);
+                let hex = Array.from(row, hex2).join(" ");
+                hex = hex.padEnd(16 * 3 - 1, " ");
+                const ascii = Array.from(row, (x) => (x >= 0x20 && x < 0x7f ? String.fromCharCode(x) : ".")).join("");
+                if ($("showTs").checked) append("ts", off === 0 ? tsText(e.t) : " ".repeat(15));
+                append(cls, `${off === 0 ? label : "   "} ${hex}  ${ascii}\n`);
+            }
+            atLineStart = true;
+        }
+
+        function renderEntry(e) {
+            const hexView = viewMode() === "hex";
+
+            if (e.dir === "rx") {
+                if (hexView) renderHex(e, "", "RX"); else renderRxText(e);
+
+            } else if (e.dir === "tx") {
+                if (!$("showTx").checked) return;
+                if (hexView) { renderHex(e, "tx", "TX"); return; }
+                newLine();
+                lastDir = "tx";
+                lineStart(e.t);
+                // sent text: show the line ending as \r \n instead of breaking the line twice
+                const text = new TextDecoder("utf-8").decode(e.data).replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+                append("tx", "> " + text + "\n");
+                atLineStart = true;
+
+            } else {
+                newLine();
+                lastDir = e.dir;
+                lineStart(e.t);
+                append(e.dir === "err" ? "err" : "sys", "* " + e.data + "\n");
+                atLineStart = true;
+            }
+        }
+
+        function scrollDown() {
+            if ($("autoScroll").checked) term.scrollTop = term.scrollHeight;
+        }
+
+        function rerender() {
+            term.textContent = "";
+            decoder = new TextDecoder("utf-8");
+            atLineStart = true; lastDir = ""; lastWasCR = false;
+            entries.forEach(renderEntry);
+            scrollDown();
+        }
+
+        function addEntry(e) {
+            entries.push(e);
+            entryBytes += typeof e.data === "string" ? e.data.length : e.data.length;
+            while (entryBytes > LOG_MAX_BYTES && entries.length > 1) {
+                const old = entries.shift();
+                entryBytes -= old.data.length;
+            }
+
+            renderEntry(e);
+            if (term.childNodes.length > TERM_MAX_NODES) {
+                // many small chunks: drop the older half so the rebuild does not repeat on every chunk
+                const old = entries.splice(0, entries.length >> 1);
+                old.forEach((x) => { entryBytes -= x.data.length; });
+                rerender();
+            } else {
+                scrollDown();
+            }
+        }
+
+        const sysLog = (text, err) => addEntry({ dir: err ? "err" : "sys", t: new Date(), data: String(text) });
+
+        // ---------- devices ----------
+        function devLabel(d) {
+            return d.product || d.manuf || d.driver || `device ${d.id}`;
+        }
+
+        function useBadge(d) {
+            if (!d.alive) return `<span class="badge bg-danger">not responding</span>`;
+            switch (d.use) {
+                case 1: return `<span class="badge bg-info text-dark" title="Opening takes the port over from the USB passthrough">passthrough</span>`;
+                case 2: return `<span class="badge bg-warning text-dark">other script</span>`;
+                case 3: return `<span class="badge bg-success">this terminal</span>`;
+                default: return `<span class="badge bg-secondary">free</span>`;
+            }
+        }
+
+        function renderDevices() {
+            let selId = status.open ? status.id : +$("devSel").value;
+            if (!devices.some((d) => d.id === selId)) selId = devices.length ? devices[0].id : 0;
+
+            $("devBody").innerHTML = devices.map((d) => `
+                <tr class="dev-row ${d.id === selId ? "table-active" : ""}" data-id="${d.id}">
+                    <td>${d.id}</td>
+                    <td>${esc(devLabel(d))}${d.manuf && d.product ? `<div class="small text-body-secondary">${esc(d.manuf)}</div>` : ""}</td>
+                    <td class="mono">${hex2(d.vid >> 8)}${hex2(d.vid & 0xff)}:${hex2(d.pid >> 8)}${hex2(d.pid & 0xff)}</td>
+                    <td>${esc(d.driver)}</td>
+                    <td class="mono small">${esc(d.serial || "—")}</td>
+                    <td>${(d.itf || []).map((n) => esc(n)).join(", ") || "—"} <span class="text-body-secondary small">of ${d.itfCount}</span></td>
+                    <td>${useBadge(d)}</td>
+                </tr>`).join("");
+            $("devEmpty").classList.toggle("d-none", devices.length > 0);
+
+            $("devSel").innerHTML = devices.length
+                ? devices.map((d) => `<option value="${d.id}" ${d.id === selId ? "selected" : ""}>#${d.id} ${esc(devLabel(d))}</option>`).join("")
+                : `<option value="">no devices</option>`;
+            renderItf();
+        }
+
+        function renderItf() {
+            const d = devices.find((x) => x.id === +$("devSel").value);
+            const cur = status.open && d && d.id === status.id ? status.itf : +$("itfSel").value;
+            const list = d && d.itf && d.itf.length ? d.itf : [];
+            $("itfSel").innerHTML = list.length
+                ? list.map((n) => `<option value="${n}" ${n === cur ? "selected" : ""}>${n}</option>`).join("")
+                : `<option value="">—</option>`;
+            updateControls();
+        }
+
+        // ---------- status / controls ----------
+        function updateControls() {
+            const open = status.open;
+            const canOpen = status.running && !open && $("devSel").value !== "" && $("itfSel").value !== "";
+
+            $("openBtn").disabled = !canOpen;
+            $("closeBtn").disabled = !open;
+            $("devSel").disabled = open;
+            $("itfSel").disabled = open;
+            $("dtr").disabled = !open;
+            $("rts").disabled = !open;
+            $("txData").disabled = !open;
+            $("txBtn").disabled = !open;
+        }
+
+        function renderStatus() {
+            $("hostBadge").className = "badge " + (status.running ? "bg-success" : "bg-danger");
+            $("hostBadge").textContent = status.running ? "host running" : "host off";
+            $("hostHint").classList.toggle("d-none", !!status.running);
+            $("hostInfo").textContent = status.running
+                ? `free ports: ${status.freePorts} · host channels: ${status.chUsed}/${status.chTotal}`
+                : "";
+
+            $("portBadge").className = "badge " + (status.open ? "bg-success" : "bg-secondary");
+            $("portBadge").textContent = status.open
+                ? `open: #${status.id} ${status.name}, itf ${status.itf}, ${status.baud} baud`
+                : "closed";
+
+            if (status.open) {
+                $("dtr").checked = !!status.dtr;
+                $("rts").checked = !!status.rts;
+                if (document.activeElement !== $("baud")) $("baud").value = status.baud;
+            } else {
+                $("dtr").checked = false;
+                $("rts").checked = false;
+            }
+            updateControls();
+        }
+
+        // ---------- backend messages ----------
+        BeApp.ready().then(() => {
+            cmd({ cmd: "list" });
+            cmd({ cmd: "status" });
+        });
+
+        BeApp.onMessage((raw) => {
+            let m;
+            try { m = JSON.parse(raw); } catch (e) { return; }
+
+            if (m.type === "status") {
+                const wasOpen = status.open;
+                status = m;
+                renderStatus();
+                if (wasOpen !== status.open) renderDevices();
+
+            } else if (m.type === "devices") {
+                devices = m.list || [];
+                renderDevices();
+
+            } else if (m.type === "rx") {
+                const data = fromHex(m.hex || "");
+                rxCount += data.length;
+                $("rxCount").textContent = rxCount;
+                addEntry({ dir: "rx", t: new Date(), data });
+
+            } else if (m.type === "log") {
+                sysLog(m.text, m.level === "error");
+            }
+        });
+
+        // ---------- UI events ----------
+        $("refresh").addEventListener("click", () => { cmd({ cmd: "list" }); cmd({ cmd: "status" }); });
+
+        $("devBody").addEventListener("click", (ev) => {
+            const tr = ev.target.closest("tr[data-id]");
+            if (!tr || status.open) return;
+            $("devSel").value = tr.dataset.id;
+            renderDevices();
+        });
+        $("devSel").addEventListener("change", renderDevices);
+        $("itfSel").addEventListener("change", updateControls);
+
+        const baudValue = () => {
+            const b = parseInt($("baud").value, 10);
+            return b >= 50 && b <= 12000000 ? b : 0;
+        };
+
+        $("openBtn").addEventListener("click", () => {
+            const baud = baudValue();
+            if (!baud) { sysLog("invalid baud rate", true); return; }
+            store.set("baud", baud);
+            cmd({ cmd: "open", id: +$("devSel").value, itf: +$("itfSel").value, baud });
+        });
+        $("closeBtn").addEventListener("click", () => cmd({ cmd: "close" }));
+
+        // baud change on an open port: applied when the field is committed
+        $("baud").addEventListener("change", () => {
+            const baud = baudValue();
+            if (!baud) { sysLog("invalid baud rate", true); return; }
+            store.set("baud", baud);
+            if (status.open && baud !== status.baud) cmd({ cmd: "baud", baud });
+        });
+
+        const sendLines = () => cmd({ cmd: "lines", dtr: $("dtr").checked, rts: $("rts").checked });
+        $("dtr").addEventListener("change", sendLines);
+        $("rts").addEventListener("change", sendLines);
+
+        document.querySelectorAll("input[name=view]").forEach((r) => r.addEventListener("change", () => { store.set("view", viewMode()); rerender(); }));
+        $("showTs").addEventListener("change", () => { store.set("ts", $("showTs").checked ? 1 : 0); rerender(); });
+        $("showTx").addEventListener("change", () => { store.set("tx", $("showTx").checked ? 1 : 0); rerender(); });
+        $("autoScroll").addEventListener("change", scrollDown);
+        $("clearBtn").addEventListener("click", () => {
+            entries = []; entryBytes = 0; rxCount = 0; txCount = 0;
+            $("rxCount").textContent = "0"; $("txCount").textContent = "0";
+            rerender();
+        });
+
+        // ---------- send ----------
+        const txHistory = [];
+        let txHistoryPos = 0;
+
+        function txModeChanged() {
+            const hex = $("txMode").value === "hex";
+            $("txData").placeholder = hex ? "HEX bytes, e.g. FE 00 21 01 20" : "text to send";
+            $("txEol").disabled = hex;
+            store.set("txMode", $("txMode").value);
+        }
+        $("txMode").addEventListener("change", txModeChanged);
+        $("txEol").addEventListener("change", () => store.set("eol", $("txEol").value));
+
+        // "FE 00 21", "fe0021", "0xFE,0x00" -> "FE0021"; null when not valid HEX
+        function parseHexInput(s) {
+            const clean = s.replace(/0x/gi, "").replace(/[\s,;:-]/g, "");
+            if (!clean.length || clean.length % 2 || /[^0-9a-f]/i.test(clean)) return null;
+            return clean.toUpperCase();
+        }
+
+        function send() {
+            const input = $("txData").value;
+            let hex;
+
+            if ($("txMode").value === "hex") {
+                hex = parseHexInput(input);
+                if (hex === null) {
+                    $("txErr").textContent = "Invalid HEX: use pairs of hex digits, e.g. FE 00 21";
+                    $("txErr").classList.remove("d-none");
+                    return;
+                }
+            } else {
+                hex = toHex(new TextEncoder().encode(input)) + $("txEol").value;
+                if (!hex) return;
+            }
+            $("txErr").classList.add("d-none");
+
+            cmd({ cmd: "tx", hex });
+
+            const data = fromHex(hex);
+            txCount += data.length;
+            $("txCount").textContent = txCount;
+            addEntry({ dir: "tx", t: new Date(), data });
+
+            if (input && txHistory[txHistory.length - 1] !== input) txHistory.push(input);
+            if (txHistory.length > 50) txHistory.shift();
+            txHistoryPos = txHistory.length;
+            $("txData").value = "";
+        }
+
+        $("txBtn").addEventListener("click", send);
+        $("txData").addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { send(); return; }
+            // command history
+            if (e.key === "ArrowUp" && txHistoryPos > 0) {
+                $("txData").value = txHistory[--txHistoryPos];
+                e.preventDefault();
+            } else if (e.key === "ArrowDown" && txHistoryPos < txHistory.length) {
+                txHistoryPos++;
+                $("txData").value = txHistoryPos < txHistory.length ? txHistory[txHistoryPos] : "";
+                e.preventDefault();
+            }
+        });
+
+        // ---------- restore settings ----------
+        $("baud").value = store.get("baud", "115200");
+        if (store.get("view", "text") === "hex") $("viewHex").checked = true;
+        $("showTs").checked = store.get("ts", "0") === "1";
+        $("showTx").checked = store.get("tx", "1") === "1";
+        $("txMode").value = store.get("txMode", "text");
+        $("txEol").value = store.get("eol", "0D0A");
+        txModeChanged();
+        renderDevices();
+        renderStatus();
+    </script>
+</body>
+</html>
