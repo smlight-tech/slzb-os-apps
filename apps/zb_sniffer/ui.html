@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+    Zigbee Sniffer — SLZB-OS app page.
+
+    Runs inside a sandboxed iframe; everything goes through the BeApp SDK (postMessage bridge).
+    The Berry backend (app.be) drives the EFR32 radio; this page shows the captured frames and
+    decodes the unencrypted headers (IEEE 802.15.4 MAC, Zigbee NWK, and APS / ZCL of frames
+    without NWK security). Full decoding with the network key is left to Wireshark (ZEP output).
+-->
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Zigbee Sniffer</title>
+    <link rel="stylesheet" href="/css/merged.css">
+    <style>
+        .mono { font-family: var(--bs-font-monospace); }
+        .pkt-wrap { max-height: 34em; overflow-y: auto; }
+        .pkt-table { font-size: .82em; }
+        .pkt-table thead th { position: sticky; top: 0; z-index: 1; background: var(--bs-body-bg); }
+        .pkt-table td { white-space: nowrap; }
+        .pkt-table td.info { white-space: normal; min-width: 16em; }
+        .pkt-row { cursor: pointer; }
+        .pkt-detail td { background: var(--bs-tertiary-bg); white-space: normal; }
+        .hexdump { font-size: .95em; margin: 0; white-space: pre; }
+        .kv td { padding: .1em .8em .1em 0; border: 0; }
+        .kv td:first-child { color: var(--bs-secondary-color); }
+        .t-beacon { background: #6f42c1 !important; }
+        .t-data { background: #0d6efd !important; }
+        .t-ack { background: #6c757d !important; }
+        .t-cmd { background: #fd7e14 !important; }
+        .t-other { background: #adb5bd !important; }
+        .stat b { font-variant-numeric: tabular-nums; }
+        #radioNote:empty { display: none; }
+    </style>
+</head>
+<body class="p-3 bg-body">
+    <div class="row g-3">
+        <!-- ================= sniffer ================= -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title d-flex align-items-center gap-2 flex-wrap">
+                        Zigbee Sniffer
+                        <span id="stateBadge" class="badge bg-secondary">…</span>
+                        <span id="ncpInfo" class="text-body-secondary small fw-normal"></span>
+                    </h5>
+
+                    <div class="row g-2 mb-2">
+                        <div class="col-12 col-md-5">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Radio</span>
+                                <select id="chip" class="form-select"></select>
+                            </div>
+                        </div>
+                        <div class="col-7 col-md-4">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Channel</span>
+                                <select id="channel" class="form-select"></select>
+                            </div>
+                        </div>
+                        <div class="col-5 col-md-3 d-flex gap-2">
+                            <button id="startBtn" class="btn btn-sm btn-primary flex-fill">Start</button>
+                            <button id="stopBtn" class="btn btn-sm btn-outline-danger flex-fill" disabled>Stop</button>
+                        </div>
+                    </div>
+                    <div id="radioNote" class="small mb-2"></div>
+
+                    <div class="row g-2 align-items-center mb-2 small">
+                        <div class="col-12 col-md-auto">
+                            <div class="form-check form-switch mb-0">
+                                <input id="toUi" class="form-check-input" type="checkbox" checked>
+                                <label class="form-check-label" for="toUi">Show packets on this page</label>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-auto">
+                            <div class="form-check form-switch mb-0">
+                                <input id="toZep" class="form-check-input" type="checkbox">
+                                <label class="form-check-label" for="toZep">Send to Wireshark (ZEP over UDP)</label>
+                            </div>
+                        </div>
+                        <div class="col-8 col-md-3">
+                            <input id="host" class="form-control form-control-sm" placeholder="PC with Wireshark, e.g. 192.168.1.10" autocomplete="off">
+                        </div>
+                        <div class="col-4 col-md-2">
+                            <input id="port" class="form-control form-control-sm" inputmode="numeric" value="17754" title="UDP port (Wireshark decodes ZEP on 17754)">
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check mb-0">
+                                <input id="auto" class="form-check-input" type="checkbox">
+                                <label class="form-check-label" for="auto">
+                                    Start sniffing when the app starts (Wireshark output only — with <b>Start on boot</b> on the app card the device sniffs without this page)
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="warn" class="alert alert-warning small py-2 mb-2"></div>
+                    <div id="confirmBar" class="alert alert-danger small py-2 mb-2 d-none d-flex flex-wrap align-items-center gap-2">
+                        <span id="confirmText" class="me-auto"></span>
+                        <button id="confirmYes" class="btn btn-sm btn-danger">Start anyway</button>
+                        <button id="confirmNo" class="btn btn-sm btn-outline-secondary">Cancel</button>
+                    </div>
+                    <div id="errBox" class="alert alert-danger small py-2 mb-2 d-none"></div>
+
+                    <div class="d-flex flex-wrap gap-3 small stat">
+                        <span>Packets <b id="stPkts">0</b></span>
+                        <span><b id="stRate">0</b> pkt/s</span>
+                        <span>ZEP sent <b id="stZep">0</b><span id="stZepFail" class="text-danger"></span></span>
+                        <span>Page drops <b id="stDrop">0</b></span>
+                        <span>UART CRC errors <b id="stCrc">0</b></span>
+                    </div>
+                    <div id="log" class="small mt-2"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= packets ================= -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title d-flex align-items-center gap-2 flex-wrap">
+                        Packets
+                        <span id="shownInfo" class="text-body-secondary small fw-normal"></span>
+                    </h5>
+
+                    <div class="d-flex flex-wrap align-items-center gap-3 mb-2 small">
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Frame types">
+                            <input type="checkbox" class="btn-check ftype" id="fBeacon" value="beacon" checked>
+                            <label class="btn btn-outline-secondary" for="fBeacon">Beacon</label>
+                            <input type="checkbox" class="btn-check ftype" id="fData" value="data" checked>
+                            <label class="btn btn-outline-secondary" for="fData">Data</label>
+                            <input type="checkbox" class="btn-check ftype" id="fCmd" value="cmd" checked>
+                            <label class="btn btn-outline-secondary" for="fCmd">MAC cmd</label>
+                            <input type="checkbox" class="btn-check ftype" id="fAck" value="ack">
+                            <label class="btn btn-outline-secondary" for="fAck">Ack</label>
+                        </div>
+                        <input id="filter" class="form-control form-control-sm mono" style="max-width: 16em;" placeholder="filter: address, PAN, text, hex" autocomplete="off">
+                        <div class="form-check mb-0">
+                            <input id="pause" class="form-check-input" type="checkbox">
+                            <label class="form-check-label" for="pause">Pause</label>
+                        </div>
+                        <div class="form-check mb-0">
+                            <input id="autoScroll" class="form-check-input" type="checkbox" checked>
+                            <label class="form-check-label" for="autoScroll">Autoscroll</label>
+                        </div>
+                        <button id="clearBtn" class="btn btn-sm btn-outline-secondary ms-auto">Clear</button>
+                    </div>
+
+                    <div id="pktWrap" class="pkt-wrap border rounded">
+                        <table class="table table-sm table-hover align-middle mb-0 pkt-table">
+                            <thead>
+                                <tr><th>#</th><th>Time</th><th>LQI</th><th>RSSI</th><th>Len</th><th>Type</th><th>Seq</th><th>PAN</th><th>Source</th><th>Destination</th><th>Info</th></tr>
+                            </thead>
+                            <tbody id="pktBody"></tbody>
+                        </table>
+                    </div>
+                    <p class="text-body-secondary small mt-2 mb-0">
+                        Zigbee encrypts the network layer, so this page decodes the MAC and NWK headers only
+                        (APS / ZCL too for the rare frames without NWK security). Click a row for all fields and the raw bytes.
+                        For full decoding send the packets to Wireshark and add the network key there.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= Wireshark help ================= -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body small">
+                    <details>
+                        <summary class="fw-semibold">How to watch the traffic in Wireshark</summary>
+                        <ol class="mt-2 mb-2">
+                            <li>Enable <b>Send to Wireshark</b> and enter the IP address of the PC that runs Wireshark (port <span class="mono">17754</span>).</li>
+                            <li>Start a capture in Wireshark on the network interface of that PC and use the display filter <span class="mono">zep</span>.
+                                Wireshark decodes ZEP on UDP port 17754 by itself, no listening program is needed.</li>
+                            <li>To decrypt the network layer add the network key in <i>Edit → Preferences → Protocols → ZigBee → Pre-configured Keys</i>
+                                (Zigbee2MQTT: <span class="mono">network_key</span> in configuration.yaml, as 16 hex bytes).
+                                Add <span class="mono">5A:69:67:42:65:65:41:6C:6C:69:61:6E:63:65:30:39</span> (ZigBeeAlliance09) too to see the keys handed out while devices join.</li>
+                        </ol>
+                        <p class="mb-0 text-body-secondary">
+                            The radio only listens (manufacturing library receive mode) and never transmits, but it cannot be
+                            a coordinator at the same time: to sniff your own network use a second radio of a multi-radio
+                            device, or a coordinator that is not the one running the network.
+                        </p>
+                    </details>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/beAppSdk.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const cmd = (obj) => BeApp.sendMessage(JSON.stringify(obj));
+
+        const STORE_MAX = 5000;   // decoded packets kept for re-filtering
+        const ROWS_MAX = 1500;    // table rows in the DOM
+
+        const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+        const hex2 = (b) => b.toString(16).toUpperCase().padStart(2, "0");
+        const hex4 = (v) => v.toString(16).toUpperCase().padStart(4, "0");
+
+        function fromHex(str) {
+            const out = new Uint8Array(str.length >> 1);
+            for (let i = 0; i < out.length; i++) out[i] = parseInt(str.substr(i * 2, 2), 16);
+            return out;
+        }
+
+        const store = {
+            get(k, d) { try { const v = localStorage.getItem("zbsniff." + k); return v === null ? d : v; } catch (e) { return d; } },
+            set(k, v) { try { localStorage.setItem("zbsniff." + k, v); } catch (e) { /* ignore */ } },
+        };
+
+        // ================= 802.15.4 / Zigbee decoder =================
+        const MAC_CMD = {
+            1: "Association request", 2: "Association response", 3: "Disassociation notification", 4: "Data request",
+            5: "PAN ID conflict", 6: "Orphan notification", 7: "Beacon request", 8: "Coordinator realignment", 9: "GTS request",
+        };
+        const NWK_CMD = {
+            1: "Route request", 2: "Route reply", 3: "Network status", 4: "Leave", 5: "Route record", 6: "Rejoin request",
+            7: "Rejoin response", 8: "Link status", 9: "Network report", 10: "Network update", 11: "End device timeout request",
+            12: "End device timeout response", 13: "Link power delta",
+        };
+        const APS_CMD = {
+            5: "Transport key", 6: "Update device", 7: "Remove device", 8: "Request key", 9: "Switch key", 14: "Tunnel",
+            15: "Verify key", 16: "Confirm key",
+        };
+        const PROFILES = { 0x0000: "ZDP", 0x0104: "HA", 0xC05E: "ZLL", 0xA1E0: "GP" };
+
+        function nwkAddr(v) {
+            if (v === 0xFFFF) return "0xFFFF (all)";
+            if (v === 0xFFFD) return "0xFFFD (rx-on)";
+            if (v === 0xFFFC) return "0xFFFC (routers)";
+            if (v === 0x0000) return "0x0000 (coord)";
+            return "0x" + hex4(v);
+        }
+
+        function decode(b) {
+            const r = { type: "other", typeName: "?", seq: "", pan: "", src: "", dst: "", info: "", fields: [] };
+            let o = 0;
+            const need = (n) => { if (o + n > b.length) throw new Error("truncated"); };
+            const u8 = () => { need(1); return b[o++]; };
+            const u16 = () => { need(2); const v = b[o] | (b[o + 1] << 8); o += 2; return v; };
+            const eui = () => { need(8); let s = ""; for (let i = 7; i >= 0; i--) s += hex2(b[o + i]) + (i ? ":" : ""); o += 8; return s; };
+            const addr = (mode) => (mode === 2 ? "0x" + hex4(u16()) : mode === 3 ? eui() : "");
+            const f = (k, v) => r.fields.push([k, v]);
+
+            try {
+                const fc = u16();
+                const ft = fc & 7, sec = (fc >> 3) & 1, pend = (fc >> 4) & 1, ackReq = (fc >> 5) & 1, panComp = (fc >> 6) & 1;
+                const dam = (fc >> 10) & 3, ver = (fc >> 12) & 3, sam = (fc >> 14) & 3;
+                r.seq = u8();
+                r.type = ["beacon", "data", "ack", "cmd"][ft] || "other";
+                r.typeName = ["Beacon", "Data", "Ack", "MAC cmd"][ft] || `type ${ft}`;
+                f("MAC frame control", `0x${hex4(fc)} — ${r.typeName}${sec ? ", security" : ""}${pend ? ", frame pending" : ""}${ackReq ? ", ack request" : ""}${panComp ? ", PAN ID compression" : ""}, version ${ver}`);
+                f("MAC sequence", r.seq);
+
+                let dstPan = null, srcPan = null;
+                if (dam) { dstPan = u16(); r.dst = addr(dam); }
+                if (sam) { if (!panComp) srcPan = u16(); r.src = addr(sam); }
+                const pan = dstPan !== null ? dstPan : srcPan;
+                if (pan !== null) r.pan = "0x" + hex4(pan);
+                if (dstPan !== null) f("Destination PAN", "0x" + hex4(dstPan));
+                if (r.dst) f("Destination", r.dst);
+                if (srcPan !== null) f("Source PAN", "0x" + hex4(srcPan));
+                if (r.src) f("Source", r.src);
+
+                if (ft === 2) { r.info = "Ack"; return r; }
+                if (sec) { r.info = "MAC security (not used by Zigbee)"; return r; }
+
+                if (ft === 3) {
+                    const id = u8();
+                    r.info = MAC_CMD[id] || `MAC command 0x${hex2(id)}`;
+                    f("MAC command", r.info);
+                    return r;
+                }
+
+                if (ft === 0) {
+                    const sf = u16();
+                    const gts = u8();
+                    if (gts & 7) o += 1 + 3 * (gts & 7);
+                    const pa = u8();
+                    o += 2 * (pa & 7) + 8 * ((pa >> 4) & 7);
+                    const permit = (sf >> 15) & 1;
+                    f("Superframe", `0x${hex4(sf)} — association permit ${permit ? "yes" : "no"}, PAN coordinator ${(sf >> 14) & 1 ? "yes" : "no"}`);
+                    r.info = `permit join ${permit ? "ON" : "off"}`;
+                    if (o < b.length && b[o] === 0) {
+                        o++;
+                        const sp = u8(), dev = u8();
+                        const ext = eui();
+                        f("Zigbee beacon", `stack profile ${sp & 15}, protocol ${sp >> 4}, router capacity ${(dev >> 2) & 1 ? "yes" : "no"}, depth ${(dev >> 3) & 15}, end device capacity ${(dev >> 7) & 1 ? "yes" : "no"}`);
+                        f("Extended PAN ID", ext);
+                        r.info += `, ext PAN ${ext}, router cap ${(dev >> 2) & 1 ? "yes" : "no"}, end device cap ${(dev >> 7) & 1 ? "yes" : "no"}`;
+                    }
+                    return r;
+                }
+
+                // ---- data frame: Zigbee NWK ----
+                if (o >= b.length) { r.info = "empty data frame"; return r; }
+                const nfc = u16();
+                const nt = nfc & 3, nver = (nfc >> 2) & 15, mcast = (nfc >> 8) & 1, nsec = (nfc >> 9) & 1;
+                const srcRoute = (nfc >> 10) & 1, extDst = (nfc >> 11) & 1, extSrc = (nfc >> 12) & 1;
+                if (nt === 3) {
+                    r.info = "Inter-PAN (touchlink / Green Power)";
+                    f("NWK frame control", `0x${hex4(nfc)} — inter-PAN`);
+                    return r;
+                }
+                const ndst = u16(), nsrc = u16(), radius = u8(), nseq = u8();
+                f("NWK frame control", `0x${hex4(nfc)} — ${nt === 1 ? "command" : "data"}, protocol ${nver}${nsec ? ", security" : ""}${mcast ? ", multicast" : ""}${srcRoute ? ", source route" : ""}`);
+                f("NWK destination", nwkAddr(ndst));
+                f("NWK source", nwkAddr(nsrc));
+                f("NWK radius / sequence", `${radius} / ${nseq}`);
+                if (extDst) f("NWK extended destination", eui());
+                if (extSrc) f("NWK extended source", eui());
+                if (mcast) f("NWK multicast control", "0x" + hex2(u8()));
+                if (srcRoute) {
+                    const cnt = u8(); u8();
+                    const relays = [];
+                    for (let i = 0; i < cnt; i++) relays.push("0x" + hex4(u16()));
+                    f("NWK source route", relays.join(" → ") || "—");
+                }
+                const route = `NWK ${nwkAddr(nsrc)} → ${nwkAddr(ndst)}`;
+
+                if (nsec) {
+                    const sc = u8();
+                    need(4);
+                    const fcnt = (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16)) + b[o + 3] * 0x1000000;
+                    o += 4;
+                    let secSrc = "";
+                    if ((sc >> 5) & 1) secSrc = eui();
+                    const keyId = (sc >> 3) & 3;
+                    if (keyId === 1) f("NWK key sequence", u8());
+                    f("NWK security", `frame counter ${fcnt}${secSrc ? ", source " + secSrc : ""}, key ${["data", "network", "key-transport", "key-load"][keyId]}`);
+                    r.info = `${nt === 1 ? "NWK command" : "NWK data"} (encrypted) · ${route}, fc ${fcnt}`;
+                    return r;
+                }
+
+                if (nt === 1) {
+                    const id = u8();
+                    r.info = `${NWK_CMD[id] || "NWK command 0x" + hex2(id)} · ${route}`;
+                    f("NWK command", NWK_CMD[id] || "0x" + hex2(id));
+                    return r;
+                }
+
+                // ---- unencrypted NWK data: APS ----
+                const afc = u8();
+                const at = afc & 3, mode = (afc >> 2) & 3, asec = (afc >> 5) & 1, aext = (afc >> 7) & 1;
+                f("APS frame control", `0x${hex2(afc)} — ${["data", "command", "ack", "inter-PAN"][at]}, ${["unicast", "?", "broadcast", "group"][mode]}${asec ? ", security" : ""}`);
+                if (at === 1) {
+                    const counter = u8();
+                    if (asec) {
+                        r.info = `APS command (APS encrypted) · ${route}`;
+                        f("APS counter", counter);
+                        return r;
+                    }
+                    const id = u8();
+                    r.info = `${APS_CMD[id] || "APS command 0x" + hex2(id)} · ${route}`;
+                    f("APS command", APS_CMD[id] || "0x" + hex2(id));
+                    return r;
+                }
+                if (at === 2 && ((afc >> 4) & 1)) {
+                    f("APS counter", u8());
+                    r.info = `APS ack · ${route}`;
+                    return r;
+                }
+                let dstEp = null, group = null;
+                if (mode === 3) group = u16(); else dstEp = u8();
+                const cluster = u16(), profile = u16(), srcEp = u8(), counter = u8();
+                if (aext) { const efc = u8(); if (efc & 3) o += 2; }
+                f("APS", `cluster 0x${hex4(cluster)}, profile 0x${hex4(profile)} ${PROFILES[profile] || ""}, ep ${srcEp} → ${group !== null ? "group 0x" + hex4(group) : dstEp}, counter ${counter}`);
+                if (at === 2) { r.info = `APS ack · ${route}`; return r; }
+                if (asec) { r.info = `APS data (APS encrypted), cluster 0x${hex4(cluster)} · ${route}`; return r; }
+                let zcl = "";
+                if (profile !== 0x0000 && o + 3 <= b.length) {
+                    const zfc = u8();
+                    let manuf = null;
+                    if ((zfc >> 2) & 1) manuf = u16();
+                    const zseq = u8(), zcmd = u8();
+                    zcl = ` · ZCL ${zfc & 3 ? "cluster-specific" : "global"} cmd 0x${hex2(zcmd)}${manuf !== null ? ", manuf 0x" + hex4(manuf) : ""}`;
+                    f("ZCL", `frame control 0x${hex2(zfc)}, seq ${zseq}, command 0x${hex2(zcmd)}${manuf !== null ? ", manufacturer 0x" + hex4(manuf) : ""}`);
+                } else if (profile === 0x0000) {
+                    zcl = ` · ZDO 0x${hex4(cluster)}`;
+                }
+                r.info = `${PROFILES[profile] || "APS"} cluster 0x${hex4(cluster)}${zcl} · ${route}`;
+            } catch (e) {
+                r.info = (r.info ? r.info + " · " : "") + "truncated frame";
+            }
+            return r;
+        }
+
+        // ================= packets =================
+        let packets = [];      // { n, t: Date, lqi, rssi, bytes, d: decoded }
+        let pktNo = 0;
+        let rows = 0;
+        let openDetail = null;
+
+        const typeOn = () => new Set(Array.from(document.querySelectorAll(".ftype:checked"), (x) => x.value));
+        let typeFilter = new Set();
+        let textFilter = "";
+
+        function matches(p) {
+            if (!typeFilter.has(p.d.type === "other" ? "data" : p.d.type)) return false;
+            if (!textFilter) return true;
+            if (p.hay === undefined) {
+                p.hay = [p.d.src, p.d.dst, p.d.pan, p.d.info, p.d.typeName, p.hex].join(" ").toLowerCase();
+            }
+            return p.hay.includes(textFilter);
+        }
+
+        function timeText(t) {
+            return `${t.toTimeString().slice(0, 8)}.${String(t.getMilliseconds()).padStart(3, "0")}`;
+        }
+
+        function rowHtml(p) {
+            const d = p.d;
+            return `<tr class="pkt-row" data-n="${p.n}">
+                <td>${p.n}</td>
+                <td class="mono">${timeText(p.t)}</td>
+                <td>${p.lqi}</td>
+                <td>${p.rssi}</td>
+                <td>${p.bytes.length + 2}</td>
+                <td><span class="badge t-${d.type}">${esc(d.typeName)}</span></td>
+                <td>${d.seq}</td>
+                <td class="mono">${esc(d.pan)}</td>
+                <td class="mono">${esc(d.src)}</td>
+                <td class="mono">${esc(d.dst)}</td>
+                <td class="info">${esc(d.info)}</td>
+            </tr>`;
+        }
+
+        function detailHtml(p) {
+            const lines = [];
+            for (let off = 0; off < p.bytes.length; off += 16) {
+                const row = p.bytes.subarray(off, off + 16);
+                const hex = Array.from(row, hex2).join(" ").padEnd(16 * 3 - 1, " ");
+                const ascii = Array.from(row, (x) => (x >= 0x20 && x < 0x7f ? String.fromCharCode(x) : ".")).join("");
+                lines.push(`${hex4(off)}  ${hex}  ${ascii}`);
+            }
+            return `<tr class="pkt-detail" data-detail="${p.n}"><td colspan="11">
+                <table class="kv small mb-2"><tbody>
+                    ${p.d.fields.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("")}
+                    <tr><td>Radio</td><td class="mono">LQI ${p.lqi}, RSSI ${p.rssi} dBm, ${p.bytes.length} bytes + 2 FCS</td></tr>
+                </tbody></table>
+                <pre class="hexdump mono">${esc(lines.join("\n"))}</pre>
+            </td></tr>`;
+        }
+
+        function trimRows() {
+            const body = $("pktBody");
+            while (rows > ROWS_MAX) {
+                const first = body.querySelector("tr.pkt-row");
+                if (!first) break;
+                const next = first.nextElementSibling;
+                if (next && next.classList.contains("pkt-detail")) next.remove();
+                first.remove();
+                rows--;
+            }
+        }
+
+        function updateShown() {
+            $("shownInfo").textContent = `${rows} shown · ${packets.length} kept`;
+        }
+
+        function scrollDown() {
+            if ($("autoScroll").checked) $("pktWrap").scrollTop = $("pktWrap").scrollHeight;
+        }
+
+        function rerender() {
+            typeFilter = typeOn();
+            textFilter = $("filter").value.trim().toLowerCase();
+            const list = packets.filter(matches).slice(-ROWS_MAX);
+            rows = list.length;
+            openDetail = null;
+            $("pktBody").innerHTML = list.map(rowHtml).join("");
+            updateShown();
+            scrollDown();
+        }
+
+        function addPackets(msg) {
+            const nowMs = Date.now();
+            let html = "";
+            for (const [ms, lqi, rssi, hex] of msg.list || []) {
+                const bytes = fromHex(hex);
+                const p = { n: ++pktNo, t: new Date(nowMs - (msg.now - ms)), lqi, rssi, bytes, hex: hex.toLowerCase(), d: decode(bytes) };
+                packets.push(p);
+                if (!$("pause").checked && matches(p)) { html += rowHtml(p); rows++; }
+            }
+            if (packets.length > STORE_MAX) packets.splice(0, packets.length - STORE_MAX);
+            if (html) {
+                $("pktBody").insertAdjacentHTML("beforeend", html);
+                trimRows();
+                scrollDown();
+            }
+            updateShown();
+        }
+
+        $("pktBody").addEventListener("click", (ev) => {
+            const tr = ev.target.closest("tr.pkt-row");
+            if (!tr) return;
+            const n = +tr.dataset.n;
+            const shown = $("pktBody").querySelector(`tr[data-detail="${n}"]`);
+            if (shown) { shown.remove(); return; }
+            const p = packets.find((x) => x.n === n);
+            if (p) tr.insertAdjacentHTML("afterend", detailHtml(p));
+        });
+
+        // ================= status =================
+        let status = { state: "idle", radios: [] };
+        let formLoaded = false;
+        let prevPkts = null, prevAt = 0;
+        const FW_NAMES = { 0: "coordinator", 1: "router", 2: "Thread RCP", 3: "multi-PAN", 4: "Zigbee Hub", 5: "Z-Wave", 6: "Z-Wave", 7: "Z-Wave", 8: "Thread BR", 9: "remote router" };
+
+        const FW_COORDINATOR = 0;
+
+        // why the radio cannot sniff, "" if it can: EFR32 Zigbee radio with the coordinator (EmberZNet NCP) firmware only
+        function radioProblem(r) {
+            if (r.zw) return "Z-Wave radio";
+            if (!r.efr) return "not an EFR32 radio";
+            if (r.fwType !== FW_COORDINATOR) return "incompatible firmware";
+            return "";
+        }
+        const radioUsable = (r) => !radioProblem(r);
+        const fwName = (r) => (r.fwType in FW_NAMES ? FW_NAMES[r.fwType] : "unknown") + " fw";
+
+        function renderRadios() {
+            const cur = status.state === "idle" ? +$("chip").value || status.chip : status.chip;
+            $("chip").innerHTML = (status.radios || []).map((r) => {
+                const why = radioProblem(r);
+                return `<option value="${r.id}" ${r.id === cur ? "selected" : ""} ${why ? "disabled" : ""}>Radio ${r.id}: ${esc(r.model)} (${fwName(r)})${why ? " — " + why : ""}</option>`;
+            }).join("") || `<option value="">no radio</option>`;
+            if ($("chip").selectedOptions.length && $("chip").selectedOptions[0].disabled) {
+                const ok = (status.radios || []).find(radioUsable);
+                if (ok) $("chip").value = ok.id;
+            }
+
+            // labels for the EFR32 radios that only miss the coordinator firmware
+            $("radioNote").innerHTML = (status.radios || [])
+                .filter((r) => r.efr && !r.zw && r.fwType !== FW_COORDINATOR)
+                .map((r) => `<span class="badge bg-danger me-1">Radio ${r.id}: incompatible firmware (${esc(fwName(r))})</span>`)
+                .join("") + ((status.radios || []).some((r) => r.efr && !r.zw && r.fwType !== FW_COORDINATOR)
+                    ? `<span class="text-body-secondary">the sniffer needs the Zigbee coordinator (EmberZNet NCP) firmware — flash it on the Zigbee firmware update page</span>`
+                    : "");
+        }
+
+        function selectedRadio() {
+            return (status.radios || []).find((r) => r.id === +$("chip").value);
+        }
+
+        function renderWarn() {
+            const r = selectedRadio();
+            if (!r || !radioUsable(r)) {
+                $("warn").innerHTML = "No compatible radio on this device — the sniffer needs an EFR32 radio with the Zigbee coordinator (EmberZNet NCP) firmware.";
+                return;
+            }
+            let t = `While sniffing, <b>radio ${r.id}</b> is taken from the Zigbee socket: its Zigbee network stops working and
+                     Zigbee2MQTT / ZHA connected to it lose the connection. On <b>Stop</b> the radio is restarted and they reconnect.`;
+            if (r.clients > 0) t += ` <b>${r.clients} client(s) connected to this radio now.</b>`;
+            $("warn").innerHTML = t;
+        }
+
+        function fillForm() {
+            $("channel").value = status.channel;
+            $("toUi").checked = !!status.ui;
+            $("toZep").checked = !!status.zep;
+            $("host").value = status.host || "";
+            $("port").value = status.port || 17754;
+            $("auto").checked = !!status.auto;
+        }
+
+        function renderStatus(fromBackend) {
+            const s = status;
+            const sniff = s.state === "sniffing";
+            const busy = s.state === "starting" || s.state === "stopping";
+
+            const badge = { idle: ["bg-secondary", "idle"], starting: ["bg-warning text-dark", "starting…"],
+                            sniffing: ["bg-success", `sniffing · channel ${s.channel}`], stopping: ["bg-warning text-dark", "stopping…"] }[s.state] || ["bg-secondary", s.state];
+            $("stateBadge").className = "badge " + badge[0];
+            $("stateBadge").textContent = badge[1];
+            $("ncpInfo").textContent = s.ezsp ? `EZSP v${s.ezsp}${s.eui ? " · EUI64 " + s.eui : ""}` : "";
+
+            if (fromBackend && !formLoaded) { fillForm(); formLoaded = true; }
+            if (sniff || busy) {
+                if (document.activeElement !== $("channel")) $("channel").value = s.channel;
+            }
+            renderRadios();
+            renderWarn();
+
+            $("startBtn").disabled = sniff || busy || !selectedRadio() || !radioUsable(selectedRadio());
+            $("stopBtn").disabled = !sniff;
+            $("chip").disabled = sniff || busy;
+
+            $("errBox").classList.toggle("d-none", !s.err);
+            $("errBox").textContent = s.err || "";
+
+            $("stPkts").textContent = s.pkts || 0;
+            $("stZep").textContent = s.zepSent || 0;
+            $("stZepFail").textContent = s.zepFail ? ` (${s.zepFail} failed)` : "";
+            $("stDrop").textContent = s.uiDrop || 0;
+            $("stCrc").textContent = s.crcErr || 0;
+
+            const now = Date.now();
+            if (sniff && prevPkts !== null && s.pkts >= prevPkts && now > prevAt) {
+                $("stRate").textContent = ((s.pkts - prevPkts) * 1000 / (now - prevAt)).toFixed(1);
+            } else if (!sniff) {
+                $("stRate").textContent = "0";
+            }
+            prevPkts = s.pkts;
+            prevAt = now;
+        }
+
+        function logLine(level, text) {
+            const t = timeText(new Date());
+            const div = document.createElement("div");
+            div.className = level === "error" ? "text-danger" : "text-body-secondary";
+            div.textContent = `[${t}] ${text}`;
+            $("log").appendChild(div);
+            while ($("log").childNodes.length > 6) $("log").firstChild.remove();
+        }
+
+        // ================= backend messages =================
+        BeApp.ready().then(() => cmd({ cmd: "status" }));
+
+        BeApp.onMessage((raw) => {
+            let m;
+            try { m = JSON.parse(raw); } catch (e) { return; }
+
+            if (m.type === "status") { status = m; renderStatus(true); }
+            else if (m.type === "pkts") addPackets(m);
+            else if (m.type === "log") logLine(m.level, m.text);
+        });
+
+        // ================= controls =================
+        for (let c = 11; c <= 26; c++) {
+            $("channel").insertAdjacentHTML("beforeend", `<option value="${c}">${c} · ${2405 + 5 * (c - 11)} MHz</option>`);
+        }
+
+        const outputs = () => ({
+            ui: $("toUi").checked, zep: $("toZep").checked,
+            host: $("host").value.trim(), port: parseInt($("port").value, 10) || 0, auto: $("auto").checked,
+        });
+
+        function doStart() {
+            $("confirmBar").classList.add("d-none");
+            cmd({ cmd: "start", chip: +$("chip").value, channel: +$("channel").value, ...outputs() });
+        }
+
+        $("startBtn").addEventListener("click", () => {
+            const o = outputs();
+            if (!o.ui && !o.zep) { logLine("error", "choose at least one destination"); return; }
+            if (o.zep && !o.host) { logLine("error", "enter the IP address of the PC with Wireshark"); $("host").focus(); return; }
+            const r = selectedRadio();
+            if (r && r.clients > 0) {
+                $("confirmText").textContent = `${r.clients} client(s) (Zigbee2MQTT / ZHA) are connected to radio ${r.id} and will lose it while sniffing.`;
+                $("confirmBar").classList.remove("d-none");
+                return;
+            }
+            doStart();
+        });
+        $("confirmYes").addEventListener("click", doStart);
+        $("confirmNo").addEventListener("click", () => $("confirmBar").classList.add("d-none"));
+        $("stopBtn").addEventListener("click", () => cmd({ cmd: "stop" }));
+        $("chip").addEventListener("change", renderWarn);
+
+        $("channel").addEventListener("change", () => {
+            if (status.state === "sniffing") cmd({ cmd: "channel", channel: +$("channel").value });
+        });
+
+        // destinations change live while sniffing; when idle they are sent with Start
+        ["toUi", "toZep", "host", "port", "auto"].forEach((id) => $(id).addEventListener("change", () => {
+            if (status.state === "sniffing") cmd({ cmd: "set", ...outputs() });
+        }));
+
+        document.querySelectorAll(".ftype").forEach((x) => x.addEventListener("change", () => {
+            store.set("types", Array.from(typeOn()).join(","));
+            rerender();
+        }));
+        let filterTimer = 0;
+        $("filter").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(rerender, 250); });
+        $("pause").addEventListener("change", () => { if (!$("pause").checked) rerender(); });
+        $("autoScroll").addEventListener("change", scrollDown);
+        $("clearBtn").addEventListener("click", () => { packets = []; pktNo = 0; rerender(); });
+
+        // ================= restore view settings =================
+        const savedTypes = store.get("types", null);
+        if (savedTypes !== null) {
+            const set = new Set(savedTypes.split(","));
+            document.querySelectorAll(".ftype").forEach((x) => { x.checked = set.has(x.value); });
+        }
+        rerender();
+        renderStatus();
+    </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+    "name": "Zigbee Sniffer",
+    "folder": "zb_sniffer",
+    "ver": "1.0.0",
+    "desc": "802.15.4 / Zigbee sniffer on an EFR32 radio: packet log in the app and live stream to Wireshark (ZEP)",
+    "img": "icon.png",
+    "permissions": [],
+    "minFw": "v3.4.2.dev1"
+}
