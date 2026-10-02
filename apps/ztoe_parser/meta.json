@@ -1,0 +1,9 @@
+{
+    "name": "ZTOE Parser",
+    "folder": "ztoe_parser",
+    "ver": "1.0.0",
+    "desc": "Графік відключень Житомиробленерго для вашої адреси з розсилкою в скрипти через ISC",
+    "img": "icon.png",
+    "permissions": [],
+    "minFw": "v3.4.2.dev1"
+}

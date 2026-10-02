@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="uk">
+<!--
+    ZTOE Parser — SLZB-OS app page.
+
+    Runs inside a sandboxed iframe; everything goes through the BeApp SDK (postMessage bridge).
+    The Berry backend (app.be) talks to www.ztoe.com.ua. The site is windows-1251: lists and the
+    address results arrive here as raw bytes in base64 and are decoded with TextDecoder.
+-->
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ZTOE Parser</title>
+    <link rel="stylesheet" href="/css/merged.css">
+    <style>
+        .mono { font-family: var(--bs-font-monospace); }
+        .slots { display: grid; grid-template-columns: repeat(48, 1fr); gap: 1px; }
+        .slot { height: 1.6em; background: var(--bs-success-bg-subtle, #d1e7dd); }
+        .slot.off { background: #dc3545; }
+        .slot.now { outline: 2px solid var(--bs-body-color); outline-offset: -2px; }
+        .hours { display: grid; grid-template-columns: repeat(24, 1fr); font-size: .7em; color: var(--bs-secondary-color); }
+        .hours span { border-left: 1px solid var(--bs-border-color); padding-left: 2px; overflow: hidden; }
+        .house-row td { vertical-align: middle; }
+        pre.code { font-size: .85em; margin: 0; white-space: pre; overflow-x: auto; }
+    </style>
+</head>
+<body class="p-3 bg-body">
+    <div class="row g-3">
+        <!-- ================= address ================= -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title d-flex align-items-center gap-2 flex-wrap">
+                        Пошук підчерги за адресою
+                        <span id="busyBadge" class="badge bg-warning text-dark d-none"></span>
+                    </h5>
+
+                    <div class="row g-2 mb-2">
+                        <div class="col-12 col-md-4">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">РЕМ</span>
+                                <select id="rem" class="form-select"><option value="">завантаження…</option></select>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Населений пункт</span>
+                                <select id="town" class="form-select" disabled><option value="">—</option></select>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Вулиця</span>
+                                <select id="street" class="form-select" disabled><option value="">—</option></select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="housesBox" class="d-none">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover mb-2 small">
+                                <thead><tr><th>Будинки</th><th>Підчерга</th><th>Споживачі</th><th></th></tr></thead>
+                                <tbody id="housesBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <p id="housesEmpty" class="text-body-secondary small mb-2 d-none">Для цієї вулиці нічого не знайдено.</p>
+
+                    <div id="current" class="small"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= settings ================= -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Налаштування</h5>
+                    <div class="row g-2 align-items-center mb-2">
+                        <div class="col-6 col-md-3">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Підчерга</span>
+                                <select id="queue" class="form-select"></select>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Кожні</span>
+                                <input id="interval" class="form-control" type="number" min="5" max="1440" value="30">
+                                <span class="input-group-text">хв</span>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Канал ISC</span>
+                                <input id="channel" class="form-control" type="number" min="0" max="100" value="10">
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="form-check form-switch mb-0 small">
+                                <input id="enabled" class="form-check-input" type="checkbox" checked>
+                                <label class="form-check-label" for="enabled">Оновлювати автоматично</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 align-items-center">
+                        <button id="saveBtn" class="btn btn-sm btn-primary">Зберегти</button>
+                        <button id="parseBtn" class="btn btn-sm btn-outline-secondary">Оновити зараз</button>
+                        <span id="runInfo" class="small text-body-secondary"></span>
+                    </div>
+                    <div id="errBox" class="alert alert-danger small py-2 mt-2 mb-0 d-none"></div>
+                    <div id="log" class="small mt-2"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= schedule ================= -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title d-flex align-items-center gap-2 flex-wrap">
+                        Графік відключень
+                        <span id="schedInfo" class="text-body-secondary small fw-normal"></span>
+                    </h5>
+                    <div id="days"><p class="text-body-secondary small mb-0">Графіка ще немає.</p></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= scripts ================= -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body small">
+                    <details>
+                        <summary class="fw-semibold">Графік у ваших скриптах (ISC broadcast)</summary>
+                        <p class="mt-2 mb-2">
+                            Після кожного успішного оновлення графік розсилається JSON-рядком у канал ISC
+                            <b id="chInfo">10</b>. Кожен скрипт, підписаний на канал, отримує свою копію.
+                            Час — ціле число <span class="mono">ГГХХ</span> (<span class="mono">800</span> = 08:00,
+                            <span class="mono">2400</span> = кінець доби), у <span class="mono">slots</span> один
+                            символ на кожні пів години (<span class="mono">1</span> = світла немає).
+                            Скрипт, запущений пізніше, отримає графік з наступним оновленням або після «Оновити зараз».
+                        </p>
+                        <pre class="code border rounded p-2 mono" id="example"></pre>
+                    </details>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/beAppSdk.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const cmd = (obj) => BeApp.sendMessage(JSON.stringify(obj));
+        const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+        // ---------- windows-1251 payloads ----------
+        const cp1251 = new TextDecoder("windows-1251");
+        const entityBox = document.createElement("textarea");
+        function htmlText(s) {                     // "&quot;Нова&quot;" -> "\"Нова\"", trims
+            entityBox.innerHTML = s;
+            return entityBox.value.replace(/\s+/g, " ").trim();
+        }
+        function decodeLines(b64) {
+            if (!b64) return [];
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return cp1251.decode(bytes).split("\n").filter((l) => l.length).map((l) => l.split("\t").map(htmlText));
+        }
+
+        const hhmm = (t) => `${String(Math.floor(t / 100)).padStart(2, "0")}:${String(t % 100).padStart(2, "0")}`;
+        const agoText = (s) => (s < 60 ? `${s} с` : s < 3600 ? `${Math.round(s / 60)} хв` : `${(s / 3600).toFixed(1)} год`);
+
+        // ---------- state ----------
+        let status = null;
+        let formLoaded = false;
+        const restore = { rem: null, town: null, street: null };  // saved address, re-selected once the lists arrive
+        const names = { rem: {}, town: {}, street: {} };
+
+        // ---------- selects ----------
+        function fillSelect(sel, kind, rows, placeholder, want) {
+            names[kind] = {};
+            sel.innerHTML = `<option value="">${esc(placeholder)}</option>` + rows.map(([id, name]) => {
+                names[kind][id] = name;
+                return `<option value="${esc(id)}" ${String(want) === id ? "selected" : ""}>${esc(name)}</option>`;
+            }).join("");
+            sel.disabled = rows.length === 0;
+        }
+
+        function resetBelow(level) {
+            if (level <= 1) { $("town").innerHTML = `<option value="">—</option>`; $("town").disabled = true; }
+            if (level <= 2) { $("street").innerHTML = `<option value="">—</option>`; $("street").disabled = true; }
+            $("housesBox").classList.add("d-none");
+            $("housesEmpty").classList.add("d-none");
+        }
+
+        $("rem").addEventListener("change", () => {
+            resetBelow(1);
+            restore.town = restore.street = null;
+            if ($("rem").value) cmd({ cmd: "towns", rem: +$("rem").value });
+        });
+        $("town").addEventListener("change", () => {
+            resetBelow(2);
+            restore.street = null;
+            if ($("town").value) cmd({ cmd: "streets", rem: +$("rem").value, town: +$("town").value });
+        });
+        $("street").addEventListener("change", () => {
+            resetBelow(3);
+            if ($("street").value) cmd({ cmd: "houses", rem: +$("rem").value, town: +$("town").value, street: +$("street").value });
+        });
+
+        function onOptions(m) {
+            const rows = decodeLines(m.b64);
+            if (m.kind === "rem") {
+                fillSelect($("rem"), "rem", rows, "Оберіть РЕМ", restore.rem);
+                if (restore.rem && $("rem").value) cmd({ cmd: "towns", rem: +$("rem").value });
+                restore.rem = null;
+            } else if (m.kind === "town") {
+                fillSelect($("town"), "town", rows, "Оберіть населений пункт", restore.town);
+                if (restore.town && $("town").value) cmd({ cmd: "streets", rem: +$("rem").value, town: +$("town").value });
+                restore.town = null;
+            } else if (m.kind === "street") {
+                fillSelect($("street"), "street", rows, "Оберіть вулицю або провулок", restore.street);
+                restore.street = null;
+            }
+        }
+
+        // ---------- address results ----------
+        let houses = [];
+        function onHouses(m) {
+            // cells: РЕМ, населений пункт, вулиця, будинки, черга, підчерга, примітка
+            houses = decodeLines(m.b64).filter((c) => c.length >= 6);
+            $("housesBox").classList.toggle("d-none", houses.length === 0);
+            $("housesEmpty").classList.toggle("d-none", houses.length > 0);
+            $("housesBody").innerHTML = houses.map((c, i) => `
+                <tr class="house-row">
+                    <td>${esc(c[3])}</td>
+                    <td><b>${esc(c[4])}.${esc(c[5])}</b></td>
+                    <td class="text-body-secondary">${esc(c[6] || "")}</td>
+                    <td class="text-end"><button class="btn btn-sm btn-outline-primary" data-use="${i}">Вибрати</button></td>
+                </tr>`).join("");
+        }
+
+        $("housesBody").addEventListener("click", (ev) => {
+            const b = ev.target.closest("button[data-use]");
+            if (!b) return;
+            const c = houses[+b.dataset.use];
+            const q = parseInt(c[4], 10), s = parseInt(c[5], 10);
+            if (!(q >= 1 && q <= 6 && s >= 1 && s <= 2)) { logLine("error", `неочікувана підчерга ${c[4]}.${c[5]}`); return; }
+            $("queue").value = `${q}.${s}`;
+            save({
+                rem: +$("rem").value, remName: names.rem[$("rem").value] || c[0],
+                town: +$("town").value, townName: names.town[$("town").value] || c[1],
+                street: +$("street").value, streetName: names.street[$("street").value] || c[2],
+                houses: c[3],
+            });
+        });
+
+        // ---------- settings ----------
+        for (let q = 1; q <= 6; q++) {
+            for (let s = 1; s <= 2; s++) $("queue").insertAdjacentHTML("beforeend", `<option value="${q}.${s}">${q}.${s}</option>`);
+        }
+        $("queue").insertAdjacentHTML("afterbegin", `<option value="">—</option>`);
+
+        function save(addr) {
+            const [q, s] = ($("queue").value || "0.0").split(".").map(Number);
+            if (!q) { logLine("error", "виберіть підчергу"); return; }
+            const o = { cmd: "save", queue: q, sub: s, interval: +$("interval").value, channel: +$("channel").value, enabled: $("enabled").checked };
+            if (addr !== undefined) o.addr = addr;
+            cmd(o);
+        }
+        $("saveBtn").addEventListener("click", () => {
+            // a sub-queue chosen by hand no longer belongs to the saved address
+            const a = status && status.addr;
+            const manual = a && a.houses !== undefined && $("queue").value !== `${status.queue}.${status.sub}`;
+            save(manual ? {} : undefined);
+        });
+        $("parseBtn").addEventListener("click", () => cmd({ cmd: "parse" }));
+
+        // ---------- status ----------
+        function renderCurrent() {
+            const s = status;
+            if (!s.queue) { $("current").innerHTML = `<span class="text-body-secondary">Підчергу ще не збережено.</span>`; return; }
+            const a = s.addr || {};
+            const place = [a.remName && `${a.remName} РЕМ`, a.townName, a.streetName].filter(Boolean).join(", ");
+            $("current").innerHTML = `Збережено: <b>підчерга ${s.queue}.${s.sub}</b>` +
+                (place ? ` · ${esc(place)}${a.houses ? ` <span class="text-body-secondary">(будинки ${esc(a.houses)})</span>` : ""}` : " · вибрана вручну");
+        }
+
+        function renderSchedule() {
+            const sc = status.schedule;
+            if (!sc || !sc.days) {
+                $("days").innerHTML = `<p class="text-body-secondary small mb-0">Графіка ще немає.</p>`;
+                $("schedInfo").textContent = "";
+                return;
+            }
+            $("schedInfo").textContent = `підчерга ${sc.queue} · оновлено на сайті ${sc.updated || "?"}`;
+            const now = new Date();
+            const today = `${String(now.getDate()).padStart(2, "0")}.${String(now.getMonth() + 1).padStart(2, "0")}.${now.getFullYear()}`;
+            const nowSlot = now.getHours() * 2 + (now.getMinutes() >= 30 ? 1 : 0);
+            $("days").innerHTML = sc.days.map((d) => {
+                const isToday = d.date === today;
+                const cells = Array.from(d.slots || "", (c, i) => {
+                    const t = hhmm(Math.floor(i / 2) * 100 + (i % 2) * 30);
+                    return `<div class="slot ${c === "1" ? "off" : ""} ${isToday && i === nowSlot ? "now" : ""}" title="${t}"></div>`;
+                }).join("");
+                const list = d.off.length
+                    ? d.off.map((o) => `<span class="badge bg-danger me-1">${hhmm(o.start)}–${hhmm(o.end)}</span>`).join("")
+                    : `<span class="badge bg-success">без відключень</span>`;
+                return `<div class="mb-3">
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-1"><b>${esc(d.date)}</b>${isToday ? `<span class="text-body-secondary small">сьогодні</span>` : ""}${list}</div>
+                    <div class="slots">${cells}</div>
+                    <div class="hours">${Array.from({ length: 24 }, (_, h) => `<span>${h}</span>`).join("")}</div>
+                </div>`;
+            }).join("");
+        }
+
+        function renderStatus() {
+            const s = status;
+            $("busyBadge").classList.toggle("d-none", !s.busy);
+            $("busyBadge").textContent = s.busy ? s.busy + "…" : "";
+            // one request at a time: while the backend works, the address selects and the buttons wait;
+            // afterwards a select is usable when it has options besides the placeholder
+            const busy = !!s.busy;
+            ["rem", "town", "street"].forEach((id) => { $(id).disabled = busy || $(id).options.length <= 1; });
+            $("saveBtn").disabled = busy;
+            $("parseBtn").disabled = busy;
+            $("housesBody").querySelectorAll("button").forEach((b) => { b.disabled = busy; });
+
+            if (!formLoaded) {
+                formLoaded = true;
+                if (s.queue) $("queue").value = `${s.queue}.${s.sub}`;
+                $("interval").value = s.interval;
+                $("channel").value = s.channel;
+                $("enabled").checked = !!s.enabled;
+            }
+
+            const parts = [];
+            parts.push(s.lastOkAgo >= 0 ? `оновлено ${agoText(s.lastOkAgo)} тому` : "ще не оновлювався");
+            if (s.nextIn >= 0) parts.push(`наступне оновлення через ${agoText(s.nextIn)}`);
+            else if (s.queue && !s.enabled) parts.push("автоматичне оновлення вимкнено");
+            if (s.delivered >= 0) parts.push(`останню розсилку отримали скриптів: ${s.delivered}`);
+            if (!s.claimed) parts.push(`<span class="text-danger">канал ISC ${s.channel} не зайнято</span>`);
+            $("runInfo").innerHTML = parts.join(" · ");
+
+            $("errBox").classList.toggle("d-none", !s.err);
+            $("errBox").textContent = s.err ? "Остання помилка: " + s.err : "";
+
+            $("chInfo").textContent = s.channel;
+            $("example").textContent = exampleCode(s.channel);
+            renderCurrent();
+            renderSchedule();
+        }
+
+        function exampleCode(chn) {
+            return `import ISC
+import json
+
+ISC.subscribe(${chn})
+
+while true
+    var msg = ISC.receive(${chn}, ISC.TIMEOUT_FOREVER)
+    var s = json.load(msg)
+    # {"queue":"3.1","updated":"23:00 30.09.2026",
+    #  "days":[{"date":"30.09.2026","slots":"0000...","off":[{"start":800,"end":1100}]}, ...]}
+    for d: s["days"]
+        for o: d["off"]
+            SLZB.log(d["date"] .. ": світла не буде " .. o["start"] .. " - " .. o["end"])
+        end
+    end
+end`;
+        }
+
+        function logLine(level, text) {
+            const div = document.createElement("div");
+            div.className = level === "error" ? "text-danger" : "text-body-secondary";
+            div.textContent = `[${new Date().toTimeString().slice(0, 8)}] ${text}`;
+            $("log").appendChild(div);
+            while ($("log").childNodes.length > 5) $("log").firstChild.remove();
+        }
+
+        // ---------- backend messages ----------
+        BeApp.ready().then(() => cmd({ cmd: "status" }));
+
+        let firstStatus = true;
+        BeApp.onMessage((raw) => {
+            let m;
+            try { m = JSON.parse(raw); } catch (e) { return; }
+
+            if (m.type === "status") {
+                status = m;
+                if (firstStatus) {
+                    firstStatus = false;
+                    const a = m.addr || {};
+                    restore.rem = a.rem || null;
+                    restore.town = a.town || null;
+                    restore.street = a.street || null;
+                    cmd({ cmd: "rems" });
+                }
+                renderStatus();
+            } else if (m.type === "opts") onOptions(m);
+            else if (m.type === "houses") onHouses(m);
+            else if (m.type === "log") logLine(m.level, m.text);
+        });
+
+        $("current").innerHTML = "";
+        setInterval(() => { if (status && status.schedule) renderSchedule(); }, 60000);   // move the "now" marker
+    </script>
+</body>
+</html>
