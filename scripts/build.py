@@ -16,6 +16,7 @@ Exits non-zero on the first validation error (CI-friendly).
 
 import json
 import os
+import re
 import sys
 import time
 import zipfile
@@ -28,8 +29,10 @@ CATALOG = os.path.join(ROOT, "apps.json")
 MAX_ZIP_SIZE = 500 * 1024      # installer upload limit
 MAX_FILENAME = 32              # ZM_ZIP_MAX_FILENAME_LEN - 1 on the device
 REQUIRED_META = ("name", "folder", "ver", "desc")
-ALLOWED_PERMISSIONS = {"events", "api"}
+ALLOWED_PERMISSIONS = {"events", "api", "fs.system", "bytecode"}
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)  # fixed entry timestamp -> deterministic archives
+OS_VERSION_RE = re.compile(r"^v?\d+(\.\d+)+(\.dev\d+)?$")  # SLZB-OS version, e.g. v3.4.2 / v3.4.2.dev1
+README = "README.md"           # shown by the coordinator UI (README button on the catalog card)
 
 
 def fail(msg):
@@ -58,6 +61,15 @@ def build_app(folder):
     perms = meta.get("permissions", [])
     if not isinstance(perms, list) or not set(perms) <= ALLOWED_PERMISSIONS:
         fail(f"{folder}: invalid permissions {perms!r}, allowed: {sorted(ALLOWED_PERMISSIONS)}")
+
+    min_fw = meta.get("minFw")
+    if min_fw is not None and not (isinstance(min_fw, str) and OS_VERSION_RE.match(min_fw)):
+        fail(f"{folder}: invalid minFw {min_fw!r}, expected an SLZB-OS version like 'v3.4.2' or 'v3.4.2.dev1'")
+
+    # model names as the device reports them (/ha_info "model"), "*" = any text; missing or [] = every model
+    models = meta.get("models", [])
+    if not isinstance(models, list) or not all(isinstance(m, str) and m.strip() for m in models):
+        fail(f"{folder}: invalid models {models!r}, expected a list of model names like ['SLZB-Ultima3', 'SLZB-MR*U']")
 
     files = sorted(
         f for f in os.listdir(path)
@@ -98,8 +110,12 @@ def build_app(folder):
     }
     if img:
         entry["icon"] = f"apps/{folder}/{img}"
-    if meta.get("minFw"):
-        entry["minFw"] = meta["minFw"]
+    if min_fw:
+        entry["minFw"] = min_fw
+    if models:
+        entry["models"] = models
+    if README in files:
+        entry["readme"] = f"apps/{folder}/{README}"
 
     print(f"  {folder}: {size} bytes, {len(ordered)} files")
     return entry

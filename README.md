@@ -13,11 +13,11 @@ coordinator UI (sandboxed iframe, [BeApp SDK](https://github.com/smlight-dev/slz
 ```
 apps/
   <folder>/            one app; the directory name must equal "folder" in meta.json
-    meta.json          manifest: name, folder, ver, desc, img, permissions, minFw
+    meta.json          manifest: name, folder, ver, desc, img, permissions, minFw, models
     app.be             Berry backend (optional for UI-only apps), installed as /beapps/<folder>/app.be
     ui.html            the app page (optional for background-only apps)
     icon.png           card icon
-    README.md          app description
+    README.md          app description, readable in the coordinator UI (README button on the catalog card)
 dist/
   <folder>.zip         GENERATED — ready-to-install archives, do not edit
 apps.json              GENERATED — the catalog the coordinator UI fetches, do not edit
@@ -37,7 +37,8 @@ edit them by hand. To build locally: `python scripts/build.py`.
     "desc": "One-line description shown on the app card",
     "img": "icon.png",
     "permissions": [],
-    "minFw": "v3.3.8.dev8"
+    "minFw": "v3.3.8.dev8",
+    "models": ["SLZB-Ultima3", "SLZB-Ultima4"]
 }
 ```
 
@@ -48,8 +49,15 @@ edit them by hand. To build locally: `python scripts/build.py`.
 | `ver` | yes | App version, used for the "update available" check |
 | `desc` | yes | Short description for the card |
 | `img` | no | Icon file inside the app folder |
-| `permissions` | no | `"events"` (coordinator SSE events) and/or `"api"` (raw `/api2` access — trusted apps only). Shown to the user before install |
-| `minFw` | no | Minimal SLZB-OS version the app needs |
+| `permissions` | no | `"events"` (coordinator SSE events), `"api"` (raw `/api2` access — trusted apps only), `"fs.system"` (the app backend may access the whole file system — trusted apps only; without it `app.be` can only access its own folder, `meta.json` read-only), `"bytecode"` (the backend may load precompiled Berry `.bec` files, `import` takes `<name>.bec` first — bytecode is not validated, trusted apps only). Shown to the user before install |
+| `minFw` | no | Minimal SLZB-OS version the app needs (`v3.4.2`, `v3.4.2.dev1`; a dev build is older than the release of the same number). The UI does not install the app on an older OS |
+| `models` | no | Compatible coordinator models, as the device reports them (`/ha_info` `model`: `SLZB-06U`, `SLZB-MR1U`, `SLZB-Ultima3`, ...). Case-insensitive, `*` matches any text (`SLZB-Ultima*`). Missing or `[]` = every model. The UI does not install the app on other models |
+| `dev` | no | `true` = developer mode on the device: a file manager for the app folder on the app card, `.be` files open in the script editor. For local development only |
+
+Model names for `models` (apps run on ESP32-S3 based coordinators only): `SLZB-06U`,
+`SLZB-06MU`, `SLZB-06Mg24U`, `SLZB-06Mg26U`, `SLZB-06p7U`, `SLZB-06p10U`, `SLZB-MR1U`,
+`SLZB-MR2U`, `SLZB-MR3U`, `SLZB-MR4U`, `SLZB-MR5U`, `SLZB-MRW10U`, `SLZB-Ultima3`,
+`SLZB-Ultima4`, `SLZB-U2L-Bridge`, `SLZB-OBD2MQTT`.
 
 ## Device constraints (checked by CI)
 
