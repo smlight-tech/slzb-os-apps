@@ -1,6 +1,6 @@
 {
   "ver": 1,
-  "updated": "2026-09-30T17:53:17Z",
+  "updated": "2026-10-02T12:08:17Z",
   "apps": [
     {
       "name": "TCP Tools",
@@ -11,7 +11,8 @@
       "size": 21505,
       "permissions": [],
       "icon": "apps/tcp_tools/icon.png",
-      "minFw": "v3.3.8.dev8"
+      "minFw": "v3.3.8.dev8",
+      "readme": "apps/tcp_tools/README.md"
     },
     {
       "name": "USB Serial Terminal",
@@ -22,7 +23,8 @@
       "size": 39273,
       "permissions": [],
       "icon": "apps/usb_terminal/icon.png",
-      "minFw": "v3.4.2.dev1"
+      "minFw": "v3.4.2.dev1",
+      "readme": "apps/usb_terminal/README.md"
     },
     {
       "name": "Zigbee Sniffer",
@@ -33,7 +35,8 @@
       "size": 66835,
       "permissions": [],
       "icon": "apps/zb_sniffer/icon.png",
-      "minFw": "v3.4.2.dev1"
+      "minFw": "v3.4.2.dev1",
+      "readme": "apps/zb_sniffer/README.md"
     },
     {
       "name": "ZHB Timers",
@@ -44,7 +47,20 @@
       "size": 28469,
       "permissions": [],
       "icon": "apps/zhb_timers/icon.png",
-      "minFw": "v3.3.8.dev8"
+      "minFw": "v3.3.8.dev8",
+      "readme": "apps/zhb_timers/README.md"
+    },
+    {
+      "name": "ZTOE Parser",
+      "folder": "ztoe_parser",
+      "appVer": "1.0.0",
+      "desc": "Графік відключень Житомиробленерго для вашої адреси з розсилкою в скрипти через ISC",
+      "zip": "dist/ztoe_parser.zip",
+      "size": 52130,
+      "permissions": [],
+      "icon": "apps/ztoe_parser/icon.png",
+      "minFw": "v3.4.2.dev1",
+      "readme": "apps/ztoe_parser/README.md"
     }
   ]
 }
