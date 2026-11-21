@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LG TV Control</title>
+  <meta name="color-scheme" content="light dark">
+  <link rel="stylesheet" href="ui.css">
+  <script src="/js/beAppSdk.js" defer></script>
+  <script src="tls.js" defer></script>
+  <script src="protocol.js" defer></script>
+  <script src="berry-example.js" defer></script>
+  <script src="ui.js" defer></script>
+</head>
+<body>
+<main class="lg-app">
+  <header class="mb-3">
+    <h1>LG TV Control</h1>
+    <p class="mb-0">Test a command here, then use it in your Berry script. Scripts can run with this page closed.</p>
+    <p class="small mt-2 mb-0">Independent project; not affiliated with or endorsed by LG Electronics.</p>
+  </header>
+  <p id="status" role="status">Connecting to the app backend…</p>
+
+  <details id="setup" class="lg-panel mb-3" open>
+    <summary>Setup</summary>
+    <form id="settings">
+      <fieldset id="settings-fields" disabled>
+        <legend class="visually-hidden">TV settings</legend>
+        <div class="mb-3">
+          <label for="host" class="form-label">TV IP address</label>
+          <input id="host" name="host" class="form-control" type="text" maxlength="15"
+                 inputmode="decimal" autocomplete="off" spellcheck="false" required>
+        </div>
+        <div class="mb-3">
+          <label for="mac" class="form-label">TV Wi-Fi MAC address</label>
+          <input id="mac" name="mac" class="form-control" type="text" maxlength="17"
+                 placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off" spellcheck="false" required>
+        </div>
+        <details class="mb-3">
+          <summary>Berry script channels</summary>
+          <p class="mt-2">Use three distinct channels that are free on your coordinator.</p>
+          <div class="lg-channel-grid">
+            <div>
+              <label for="request" class="form-label">Commands</label>
+              <input id="request" name="request" class="form-control" type="number" min="0" max="100" value="60" required>
+            </div>
+            <div>
+              <label for="result" class="form-label">Results</label>
+              <input id="result" name="result" class="form-control" type="number" min="0" max="100" value="61" required>
+            </div>
+            <div>
+              <label for="lock" class="form-label">HTTP lock</label>
+              <input id="lock" name="lock" class="form-control" type="number" min="0" max="100" value="62" required>
+            </div>
+          </div>
+        </details>
+        <button class="btn btn-secondary" type="submit">Save settings</button>
+      </fieldset>
+    </form>
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <button id="pair" class="btn btn-primary" type="button" disabled>Pair</button>
+      <button id="cancel" class="btn btn-secondary" type="button" hidden>Cancel pairing</button>
+      <button id="forget" class="btn btn-outline-danger" type="button" disabled>Forget pairing</button>
+    </div>
+    <p class="small mt-2 mb-0">Approve pairing on the TV. Forget removes the pairing from this coordinator. You can revoke access separately on the TV.</p>
+  </details>
+
+  <section aria-labelledby="test-heading">
+    <h2 id="test-heading">Test your TV</h2>
+    <p id="test-help">Save your TV settings in Setup to get started.</p>
+    <div class="lg-control-grid">
+      <fieldset id="power-controls" class="lg-panel" disabled>
+        <legend>Power</legend>
+        <div class="d-flex flex-wrap gap-2">
+          <button id="on" class="btn btn-primary" type="button" disabled>On</button>
+          <button id="off" class="btn btn-outline-secondary" type="button" disabled>Off</button>
+        </div>
+      </fieldset>
+
+      <fieldset id="audio-controls" class="lg-panel" disabled>
+        <legend>Audio</legend>
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <button id="volume-down" class="btn btn-outline-secondary" type="button" aria-label="Volume down">−</button>
+          <button id="volume-up" class="btn btn-outline-secondary" type="button" aria-label="Volume up">+</button>
+          <button id="mute" class="btn btn-outline-secondary" type="button">Mute</button>
+          <button id="unmute" class="btn btn-outline-secondary" type="button">Unmute</button>
+        </div>
+        <form id="volume-form">
+          <label for="volume" class="form-label">Target volume (0–100)</label>
+          <div class="lg-action-row">
+            <input id="volume" class="form-control" type="number" min="0" max="100" step="1"
+                   inputmode="numeric" required>
+            <button class="btn btn-outline-secondary" type="submit" aria-label="Set volume">Set</button>
+          </div>
+        </form>
+      </fieldset>
+
+      <fieldset id="input-controls" class="lg-panel" disabled>
+        <legend>Input</legend>
+        <form id="input-form">
+          <label for="input-preset" class="form-label">Target input</label>
+          <select id="input-preset" class="form-select">
+            <option value="com.webos.app.livetv">Live TV (aerial/cable)</option>
+            <option value="HDMI_1">HDMI 1</option>
+            <option value="HDMI_2">HDMI 2</option>
+            <option value="HDMI_3">HDMI 3</option>
+            <option value="HDMI_4">HDMI 4</option>
+            <option value="AV_1">AV / Composite (if fitted)</option>
+            <option value="COMP_1">Component (if fitted)</option>
+            <option value="custom">Custom input ID</option>
+          </select>
+          <div id="input-custom-field" class="mt-2" hidden>
+            <label for="input-custom" class="form-label">Input ID</label>
+            <input id="input-custom" class="form-control" type="text" maxlength="96"
+                   autocomplete="off" spellcheck="false" disabled>
+          </div>
+          <button class="btn btn-outline-secondary mt-2" type="submit">Switch input</button>
+        </form>
+      </fieldset>
+
+      <fieldset id="launch-controls" class="lg-panel" disabled>
+        <legend>Apps</legend>
+        <form id="launch-form">
+          <label for="launch-preset" class="form-label">Installed app to open</label>
+          <select id="launch-preset" class="form-select">
+            <option value="youtube.leanback.v4">YouTube</option>
+            <option value="netflix">Netflix</option>
+            <option value="amazon">Prime Video</option>
+            <option value="com.disney.disneyplus-prod">Disney+</option>
+            <option value="com.apple.appletv">Apple TV</option>
+            <option value="hulu">Hulu</option>
+            <option value="com.webos.app.browser">Web browser</option>
+            <option value="custom">Custom app ID</option>
+          </select>
+          <div id="launch-custom-field" class="mt-2" hidden>
+            <label for="launch-custom" class="form-label">App ID</label>
+            <input id="launch-custom" class="form-control" type="text" maxlength="96"
+                   autocomplete="off" spellcheck="false" disabled>
+          </div>
+          <button class="btn btn-outline-secondary mt-2" type="submit">Launch app</button>
+          <p class="small mt-2 mb-0">Common presets, not a list read from your TV. Apps must be installed and available in your region; IDs can vary.</p>
+        </form>
+      </fieldset>
+
+      <fieldset id="notify-controls" class="lg-panel lg-wide" disabled>
+        <legend>Notification</legend>
+        <form id="notify-form">
+          <label for="notification" class="form-label">Message</label>
+          <div class="lg-action-row">
+            <input id="notification" class="form-control" type="text" maxlength="160" required
+                   placeholder="Doorbell" autocomplete="off" aria-describedby="notification-help">
+            <button class="btn btn-outline-secondary" type="submit" aria-label="Send notification">Send</button>
+          </div>
+          <p id="notification-help" class="small mt-2 mb-0">Up to 160 UTF-8 bytes.</p>
+        </form>
+      </fieldset>
+    </div>
+    <p id="test-result" class="lg-panel mt-3" role="status">Choose a command above. The result will appear here.</p>
+  </section>
+
+  <details id="berry-examples" class="lg-panel mb-3">
+    <summary>Use this in Berry</summary>
+    <p class="mt-2">Copy the helper once into your script, then use the call for the last command you chose. The helper queues one command at a time and logs its result.</p>
+    <label for="berry-call" class="form-label">Berry call</label>
+    <textarea id="berry-call" class="form-control font-monospace" rows="2" readonly spellcheck="false">tv_request("on")</textarea>
+    <button id="copy-call" class="btn btn-outline-secondary mt-2" type="button">Copy call</button>
+    <details class="mt-3">
+      <summary>Berry helper</summary>
+      <p class="mt-2">Paste this above the call. The script must allow its timers to run to collect the result.</p>
+      <p>For every command except On, scripts that use HTTP need to share the app’s HTTP lock channel. If another script holds the connection, wait for it to release HTTP before trying again.</p>
+      <label for="berry-helper" class="visually-hidden">Berry helper code</label>
+      <textarea id="berry-helper" class="form-control font-monospace" rows="10" readonly spellcheck="false"></textarea>
+      <button id="copy-helper" class="btn btn-outline-secondary mt-2" type="button">Copy helper</button>
+    </details>
+    <p id="copy-status" class="small mt-2 mb-0" role="status"></p>
+  </details>
+</main>
+</body>
+</html>

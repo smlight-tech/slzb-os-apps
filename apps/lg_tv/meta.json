@@ -1,0 +1,12 @@
+{
+  "name": "LG TV Control",
+  "folder": "lg_tv",
+  "ver": "0.3.2",
+  "desc": "Control LG webOS power, audio, inputs, apps, and notifications from Berry",
+  "img": "icon.png",
+  "permissions": [],
+  "minFw": "v3.4.5.dev1",
+  "models": [
+    "SLZB-MR4U"
+  ]
+}
